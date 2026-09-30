@@ -1,0 +1,29 @@
+name: Render Backend Keep-Alive
+
+on:
+  schedule:
+    # Runs every 10 minutes to prevent Render free-tier spin-down (sleep threshold is 15m)
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
+
+jobs:
+  keep-alive:
+    name: Ping Render Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Send Keep-Alive Ping
+        run: |
+          echo "Pinging SAVEALL API health check..."
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" --max-time 60 "https://saveall-api.onrender.com/api/health")
+          echo "HTTP Status Code: $HTTP_STATUS"
+          echo "Response Body:"
+          cat response.txt
+          echo ""
+
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "✅ Backend is healthy and container is warm."
+          else
+            echo "⚠️ Health check returned status $HTTP_STATUS"
+            exit 1
+          fi

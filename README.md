@@ -357,6 +357,12 @@ Configure these variables in your deployment environments or in a local `.env` f
 4. Configure the environment variables (`FRONTEND_ORIGIN`, `PUBLIC_API_URL`, etc.).
 5. Click **Create Web Service**.
 
+> [!TIP]
+> **Keep Render Awake 24/7 (Prevent Cold Starts):**
+> Render free web services go to sleep after 15 minutes of inactivity, causing 50+ second cold start delays.
+> - **Automated (Included):** Push to GitHub to enable the pre-configured workflow [`.github/workflows/keep-alive.yml`](.github/workflows/keep-alive.yml) which pings `/api/health` every 10 minutes.
+> - **External (cron-job.org):** Create a free cron job on [cron-job.org](https://cron-job.org) targeting `https://saveall-api.onrender.com/api/health` every **10 minutes** (`*/10 * * * *`).
+
 ---
 
 ### 2. Deploy Frontend on Vercel

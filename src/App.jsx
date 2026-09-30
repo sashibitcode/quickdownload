@@ -55,10 +55,15 @@ function isValidYouTubeUrl(value) {
   try {
     const parsed = new URL(clean);
     const host = parsed.hostname.toLowerCase();
+    const isYtHost =
+      host === "youtu.be" ||
+      host === "youtube.com" ||
+      host.endsWith(".youtube.com");
     return (
       (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      (host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com")) &&
-      parsed.pathname !== "/"
+      isYtHost &&
+      parsed.pathname !== "/" &&
+      parsed.pathname.length > 1
     );
   } catch {
     return false;
@@ -74,14 +79,29 @@ function isValidInstagramUrl(value) {
   try {
     const parsed = new URL(clean);
     const host = parsed.hostname.toLowerCase();
+    const isIgHost =
+      host === "instagram.com" ||
+      host.endsWith(".instagram.com") ||
+      host === "instagr.am" ||
+      host.endsWith(".instagr.am") ||
+      host === "ddinstagram.com";
     return (
       (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      (host === "instagram.com" || host.endsWith(".instagram.com") || host === "instagr.am" || host.endsWith(".instagr.am")) &&
+      isIgHost &&
       parsed.pathname.length > 2
     );
   } catch {
     return false;
   }
+}
+
+function detectPlatform(value) {
+  if (!value) return null;
+  const clean = value.trim();
+  if (!clean) return null;
+  if (isValidYouTubeUrl(clean)) return "youtube";
+  if (isValidInstagramUrl(clean)) return "instagram";
+  return null;
 }
 
 function formatDuration(sec) {
@@ -116,13 +136,19 @@ const LOADING_STAGES = [
 ];
 
 function App() {
-  const [platform, setPlatform] = useState("youtube");
   const [url, setUrl] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [stageIndex, setStageIndex] = useState(0);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+
+  const detectedPlatform = detectPlatform(url);
+  const activeTheme = detectedPlatform
+    ? `theme-${detectedPlatform}`
+    : result?.platform
+    ? `theme-${result.platform.toLowerCase()}`
+    : "theme-auto";
 
   // Rotate loading stage for engaging cinematic feedback
   useEffect(() => {
@@ -144,17 +170,13 @@ function App() {
     setStageIndex(0);
 
     if (!cleanUrl) {
-      setError(`Please paste a ${platform === "youtube" ? "YouTube" : "Instagram"} video link.`);
+      setError("Please paste a YouTube or Instagram video link.");
       return;
     }
 
-    if (platform === "youtube" && !isValidYouTubeUrl(cleanUrl)) {
-      setError("Please enter a valid YouTube video link (e.g. https://www.youtube.com/watch?v=...)");
-      return;
-    }
-
-    if (platform === "instagram" && !isValidInstagramUrl(cleanUrl)) {
-      setError("Please enter a valid Instagram reel or post link (e.g. https://www.instagram.com/reel/...)");
+    const targetPlatform = detectPlatform(cleanUrl);
+    if (!targetPlatform) {
+      setError("Please enter a valid YouTube video link (e.g. https://www.youtube.com/watch?v=...) or Instagram link (e.g. https://www.instagram.com/reel/...)");
       return;
     }
 
@@ -180,7 +202,7 @@ function App() {
           "Accept": "application/json",
         },
         body: JSON.stringify({
-          platform: platform === "youtube" ? "YouTube" : "Instagram",
+          platform: targetPlatform === "youtube" ? "YouTube" : "Instagram",
           url: cleanUrl,
         }),
         signal: controller.signal,
@@ -206,7 +228,7 @@ function App() {
       }
 
       setResult({
-        platform: data.platform || (platform === "youtube" ? "YouTube" : "Instagram"),
+        platform: data.platform || (targetPlatform === "youtube" ? "YouTube" : "Instagram"),
         url: cleanUrl,
         status: data.status || "ready",
         title: data.title || "Video ready",
@@ -287,7 +309,7 @@ function App() {
   };
 
   return (
-    <div className={`app-wrapper theme-${platform}`}>
+    <div className={`app-wrapper ${activeTheme}`}>
       {/* Cinematic Ambient Glows */}
       <div className="ambient-glow ambient-glow-primary" aria-hidden="true" />
       <div className="ambient-glow ambient-glow-secondary" aria-hidden="true" />
@@ -324,88 +346,99 @@ function App() {
         </h1>
 
         <p className="hero-description">
-          Instant high-speed media processing for YouTube & Instagram with lossless audio clarity.
+          Universal high-speed downloader for YouTube & Instagram with automatic link detection.
         </p>
 
         {/* Master Control Card */}
-        <section className={`media-card-shell platform-${platform}`}>
-          {/* Platform Segmented Switcher */}
-          <div className="platform-switcher" role="tablist">
-            <button
-              role="tab"
-              aria-selected={platform === "youtube"}
-              className={`switcher-pill ${platform === "youtube" ? "active" : ""}`}
-              onClick={() => {
-                setPlatform("youtube");
-                setUrl("");
-                setResult(null);
-                setError("");
-              }}
-            >
-              <span className="pill-icon yt-icon">
-                <svg viewBox="0 0 24 24" fill="currentColor">
+        <section className={`media-card-shell ${detectedPlatform ? `platform-${detectedPlatform}` : "platform-auto"}`}>
+          {/* Universal Platform Bar & Auto-Detection Status */}
+          <div className="unified-status-bar">
+            <div className={`detection-pill ${detectedPlatform ? "pill-detected" : "pill-waiting"}`}>
+              <span className={`status-radar ${detectedPlatform ? "radar-active" : ""}`} />
+              <span className="detection-pill-text">
+                {detectedPlatform === "youtube"
+                  ? "YouTube Detected"
+                  : detectedPlatform === "instagram"
+                  ? "Instagram Detected"
+                  : "Auto-Detect Ready"}
+              </span>
+            </div>
+
+            <div className="supported-brands" aria-label="Supported Platforms">
+              <span className={`brand-chip-item chip-yt ${detectedPlatform === "youtube" ? "is-active" : ""}`}>
+                <svg className="chip-svg" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
                 </svg>
+                <span>YouTube</span>
               </span>
-              <span>YouTube</span>
-              {platform === "youtube" && <span className="active-glow-bar" />}
-            </button>
-
-            <button
-              role="tab"
-              aria-selected={platform === "instagram"}
-              className={`switcher-pill ${platform === "instagram" ? "active" : ""}`}
-              onClick={() => {
-                setPlatform("instagram");
-                setUrl("");
-                setResult(null);
-                setError("");
-              }}
-            >
-              <span className="pill-icon ig-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <span className={`brand-chip-item chip-ig ${detectedPlatform === "instagram" ? "is-active" : ""}`}>
+                <svg className="chip-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
                   <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
                   <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
                 </svg>
+                <span>Instagram</span>
               </span>
-              <span>Instagram</span>
-              {platform === "instagram" && <span className="active-glow-bar" />}
-            </button>
+            </div>
           </div>
 
-          {/* Subheader Title */}
+          {/* Universal Header Title */}
           <div className="card-header-info">
-            <div className="header-icon-wrap">
-              {platform === "youtube" ? (
+            <div className={`header-icon-wrap ${detectedPlatform || "auto"}`}>
+              {detectedPlatform === "youtube" ? (
                 <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M10 15l5.19-3L10 9v6m11.56-7.83c.13.47.22 1.1.28 1.9.07.8.1 1.49.1 2.09L22 12c0 2.19-.16 3.8-.44 4.83-.25.9-.83 1.48-1.73 1.73-.47.13-1.33.22-2.65.28-1.3.07-2.49.1-3.59.1L12 19c-4.19 0-6.8-.16-7.83-.44-.9-.25-1.48-.83-1.73-1.73-.13-.47-.22-1.1-.28-1.9-.07-.8-.1-1.49-.1-2.09L2 12c0-2.19.16-3.8.44-4.83.25-.9.83-1.48 1.73-1.73.47-.13 1.33-.22 2.65-.28 1.3-.07 2.49-.1 3.59-.1L12 5c4.19 0 6.8.16 7.83.44.9.25 1.48.83 1.73 1.73z"/>
+                  <path d="M10 15l5.19-3L10 9v6m11.56-7.83c.13.47.22 1.1.28 1.9.07.8.1 1.49.1 2.09L22 12c0 2.19-.16 3.8-.44 4.83-.25.9-.83 1.48-1.73 1.73-.47.13-1.33.22-2.65.28-1.3.07-2.49.1-3.59.1L12 19c-4.19 0-6.8-.16-7.83-.44-.9-.25-1.48-.83-1.73-1.73-.13-.47-.22-1.1-.28-1.9-.07-.8-.1-1.49-.1-2.09L22 12c0-2.19.16-3.8.44-4.83.25-.9.83-1.48 1.73-1.73z"/>
+                </svg>
+              ) : detectedPlatform === "instagram" ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
                 </svg>
               ) : (
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
-                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
-                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
                 </svg>
               )}
             </div>
             <div className="header-text-wrap">
-              <h2>{platform === "youtube" ? "YouTube Downloader" : "Instagram Reels & Posts"}</h2>
+              <h2>
+                {detectedPlatform === "youtube"
+                  ? "YouTube Video & Shorts"
+                  : detectedPlatform === "instagram"
+                  ? "Instagram Reels & Posts"
+                  : "All-in-One Video Downloader"}
+              </h2>
               <p>
-                {platform === "youtube"
-                  ? "Paste any YouTube video or Shorts link"
-                  : "Paste any Instagram Reel, Post, or Video link"}
+                {detectedPlatform === "youtube"
+                  ? "YouTube link detected • Ready to fetch high-definition video"
+                  : detectedPlatform === "instagram"
+                  ? "Instagram link detected • Ready to fetch Reel or Post"
+                  : "Paste any YouTube or Instagram video link — auto-detected instantly"}
               </p>
             </div>
           </div>
 
           {/* Input Box Area */}
-          <div className="input-group-cinematic">
+          <div className={`input-group-cinematic ${detectedPlatform ? `has-${detectedPlatform}` : ""}`}>
             <div className="input-prefix-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-              </svg>
+              {detectedPlatform === "youtube" ? (
+                <svg className="prefix-yt" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                </svg>
+              ) : detectedPlatform === "instagram" ? (
+                <svg className="prefix-ig" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+              )}
             </div>
 
             <input
@@ -421,11 +454,7 @@ function App() {
                   handleGetVideo();
                 }
               }}
-              placeholder={
-                platform === "youtube"
-                  ? "https://www.youtube.com/watch?v=... or shorts"
-                  : "https://www.instagram.com/reel/..."
-              }
+              placeholder="Paste any YouTube or Instagram link here..."
               aria-label="Video URL"
               disabled={loading}
             />
@@ -435,7 +464,11 @@ function App() {
                 <button
                   type="button"
                   className="action-icon-btn clear-btn"
-                  onClick={() => setUrl("")}
+                  onClick={() => {
+                    setUrl("");
+                    setError("");
+                    setResult(null);
+                  }}
                   title="Clear input"
                   aria-label="Clear input"
                 >
@@ -457,10 +490,34 @@ function App() {
             </div>
           </div>
 
+          {/* Real-time detection feedback badge */}
+          {url.trim() && (
+            <div className={`cinematic-detect-feedback ${detectedPlatform ? "is-valid" : "is-invalid"}`}>
+              {detectedPlatform === "youtube" && (
+                <>
+                  <span className="detect-icon yt">▶</span>
+                  <span>YouTube video detected & ready</span>
+                </>
+              )}
+              {detectedPlatform === "instagram" && (
+                <>
+                  <span className="detect-icon ig">📷</span>
+                  <span>Instagram media detected & ready</span>
+                </>
+              )}
+              {!detectedPlatform && (
+                <>
+                  <span className="detect-icon warn">⚠️</span>
+                  <span>Please paste a valid YouTube (youtube.com, youtu.be) or Instagram (instagram.com) link</span>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Primary Action Button */}
           <button
             type="button"
-            className={`cinematic-cta-btn ${loading ? "is-loading" : ""}`}
+            className={`cinematic-cta-btn ${loading ? "is-loading" : ""} ${detectedPlatform ? `cta-${detectedPlatform}` : ""}`}
             onClick={handleGetVideo}
             disabled={loading}
           >
@@ -471,7 +528,13 @@ function App() {
               </div>
             ) : (
               <div className="btn-normal-content">
-                <span>Fetch Video</span>
+                <span>
+                  {detectedPlatform === "youtube"
+                    ? "Fetch YouTube Video"
+                    : detectedPlatform === "instagram"
+                    ? "Fetch Instagram Reel"
+                    : "Fetch Video"}
+                </span>
                 <svg className="cta-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <line x1="5" y1="12" x2="19" y2="12" />
                   <polyline points="12 5 19 12 12 19" />

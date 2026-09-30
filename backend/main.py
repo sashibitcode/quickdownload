@@ -365,30 +365,44 @@ def is_valid_youtube_url(url: str) -> bool:
             "music.youtube.com",
             "youtu.be",
         }
-        return host in allowed_hosts or host.endswith(".youtube.com")
+        if not (host in allowed_hosts or host.endswith(".youtube.com")):
+            return False
+        if not parsed.path or parsed.path == "/":
+            return False
+        return True
     except Exception:
         return False
 
 
 def is_valid_instagram_url(url: str) -> bool:
-    parsed = urlparse(url.strip())
-    host = (parsed.netloc or "").lower()
-    if not parsed.scheme or not parsed.netloc:
+    if not url:
         return False
-    if parsed.scheme not in {"http", "https"}:
+    clean = url.strip()
+    if not clean.startswith(("http://", "https://")):
+        clean = "https://" + clean
+    try:
+        parsed = urlparse(clean)
+        host = (parsed.netloc or "").lower()
+        if not parsed.scheme or not parsed.netloc:
+            return False
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        allowed_hosts = {
+            "instagram.com",
+            "www.instagram.com",
+            "m.instagram.com",
+            "instagr.am",
+            "www.instagr.am",
+            "ddinstagram.com",
+        }
+        if host not in allowed_hosts and not host.endswith(".instagram.com") and not host.endswith(".instagr.am"):
+            return False
+        path = parsed.path.lower()
+        if not path or len(path) <= 1:
+            return False
+        return any(segment in path for segment in ["/reel/", "/reels/", "/p/", "/tv/", "/stories/", "/s/", "/share/"]) or len(path) > 3
+    except Exception:
         return False
-    allowed_hosts = {
-        "instagram.com",
-        "www.instagram.com",
-        "m.instagram.com",
-        "instagr.am",
-        "www.instagr.am",
-        "ddinstagram.com",
-    }
-    if host not in allowed_hosts and not host.endswith(".instagram.com"):
-        return False
-    path = parsed.path.lower()
-    return any(segment in path for segment in ["/reel/", "/reels/", "/p/", "/tv/"])
 
 
 class DownloadRequest(BaseModel):
@@ -496,8 +510,8 @@ def download_media(payload: DownloadRequest, request: Request):
         url = "https://" + url
         payload.url = url
 
-    # Auto-detect platform if not provided
-    if not platform:
+    # Auto-detect platform if not provided or set to auto
+    if not platform or platform.lower() in ("auto", "all", "detect", "auto-detect", "universal"):
         if is_valid_youtube_url(url):
             platform = "YouTube"
         elif is_valid_instagram_url(url):
