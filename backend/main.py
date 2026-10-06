@@ -4,6 +4,7 @@ import mimetypes
 import os
 import shutil
 import tempfile
+import threading
 import time
 from typing import Any, cast
 import urllib.error
@@ -60,6 +61,13 @@ DOWNLOAD_DIR = os.getenv(
 )
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Active background downloads coordinator and metadata cache for fast latency
+ACTIVE_DOWNLOAD_EVENTS: dict[str, threading.Event] = {}
+ACTIVE_DOWNLOAD_LOCK = threading.Lock()
+METADATA_CACHE: dict[str, tuple[dict[str, Any], float]] = {}
+FILE_NAME_ALIASES: dict[str, str] = {}
+CACHE_TTL_SECONDS = 1800  # 30 minutes cache
 
 
 
@@ -133,8 +141,8 @@ def get_js_runtimes_config():
     return config if config else None
 
 app = FastAPI(
-    title="SAVEALL API",
-    description="Backend API for SAVEALL multi-platform downloader",
+    title="Quick Download API",
+    description="Backend API for Quick Download multi-platform downloader",
     version="1.0.0",
 )
 
@@ -408,6 +416,8 @@ def is_valid_instagram_url(url: str) -> bool:
 class DownloadRequest(BaseModel):
     platform: str = ""
     url: str
+    quality: str = "720p"
+    format_type: str = "video"
 
 
 # Root and Health check endpoints (available at / and /api)
@@ -416,7 +426,7 @@ class DownloadRequest(BaseModel):
 def home():
     return {
         "success": True,
-        "message": "SAVEALL API is running!",
+        "message": "Quick Download API is running!",
         "status": "success",
     }
 
@@ -479,18 +489,75 @@ def download_file(filename: str):
     safe_name = os.path.basename(filename)
     file_path = os.path.join(DOWNLOAD_DIR, safe_name)
 
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="File not found or has expired.")
+    # 1. Direct match if already present
+    if os.path.isfile(file_path) and os.path.getsize(file_path) > 1000:
+        media_type, _ = mimetypes.guess_type(file_path)
+        return FileResponse(
+            file_path,
+            media_type=media_type or "application/octet-stream",
+            filename=safe_name,
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
 
-    media_type, _ = mimetypes.guess_type(file_path)
-    return FileResponse(
-        file_path,
-        media_type=media_type or "application/octet-stream",
-        filename=safe_name,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-        },
-    )
+    # 2. Check alias map
+    if safe_name in FILE_NAME_ALIASES:
+        aliased = FILE_NAME_ALIASES[safe_name]
+        if os.path.isfile(aliased) and os.path.getsize(aliased) > 1000:
+            media_type, _ = mimetypes.guess_type(aliased)
+            return FileResponse(
+                aliased,
+                media_type=media_type or "application/octet-stream",
+                filename=os.path.basename(aliased),
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+    # 3. If a background download is currently underway for this file or video ID, wait for it
+    event = None
+    with ACTIVE_DOWNLOAD_LOCK:
+        event = ACTIVE_DOWNLOAD_EVENTS.get(safe_name)
+        if not event:
+            for key, ev in ACTIVE_DOWNLOAD_EVENTS.items():
+                if key in safe_name:
+                    event = ev
+                    break
+
+    if event:
+        event.wait(timeout=50)
+
+    # 4. Check again after waiting
+    if os.path.isfile(file_path) and os.path.getsize(file_path) > 1000:
+        media_type, _ = mimetypes.guess_type(file_path)
+        return FileResponse(
+            file_path,
+            media_type=media_type or "application/octet-stream",
+            filename=safe_name,
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    # 5. Check alias map again
+    if safe_name in FILE_NAME_ALIASES:
+        aliased = FILE_NAME_ALIASES[safe_name]
+        if os.path.isfile(aliased) and os.path.getsize(aliased) > 1000:
+            media_type, _ = mimetypes.guess_type(aliased)
+            return FileResponse(
+                aliased,
+                media_type=media_type or "application/octet-stream",
+                filename=os.path.basename(aliased),
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+    # 6. Fallback search by title / candidate in DOWNLOAD_DIR
+    fallback_path = find_downloaded_file(title=safe_name) or find_downloaded_file()
+    if fallback_path and os.path.isfile(fallback_path) and os.path.getsize(fallback_path) > 1000:
+        media_type, _ = mimetypes.guess_type(fallback_path)
+        return FileResponse(
+            fallback_path,
+            media_type=media_type or "application/octet-stream",
+            filename=os.path.basename(fallback_path),
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    raise HTTPException(status_code=404, detail="File not found or has expired.")
 
 
 # Unified Download Endpoint (Step 4 & 7)
@@ -534,6 +601,112 @@ def download_media(payload: DownloadRequest, request: Request):
         )
 
 
+def perform_youtube_download(youtube_url: str, expected_filename: str, video_id: str, quality: str = "720p", cookie_file: str | None = None):
+    event = None
+    with ACTIVE_DOWNLOAD_LOCK:
+        event = ACTIVE_DOWNLOAD_EVENTS.get(expected_filename)
+        if not event:
+            event = threading.Event()
+            ACTIVE_DOWNLOAD_EVENTS[expected_filename] = event
+            if video_id:
+                ACTIVE_DOWNLOAD_EVENTS[video_id] = event
+
+    target_path = os.path.join(DOWNLOAD_DIR, expected_filename)
+    if os.path.isfile(target_path) and os.path.getsize(target_path) > 1000:
+        event.set()
+        return
+
+    output_template = os.path.join(DOWNLOAD_DIR, "%(title).50s-%(id)s" + (f"-{quality}" if quality != "720p" else "") + ".%(ext)s")
+    is_audio = quality.lower() in ("mp3", "audio")
+
+    if is_audio:
+        ydl_format = "bestaudio/best"
+    elif quality.lower() == "1080p":
+        ydl_format = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+    elif quality.lower() in ("360p", "480p"):
+        ydl_format = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+    else:
+        ydl_format = "18/22/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+
+    ydl_options: Any = {
+        "format": ydl_format,
+        "outtmpl": output_template,
+        "noplaylist": True,
+        "ffmpeg_location": FFMPEG_PATH or FFMPEG_DIR,
+        "concurrent_fragment_downloads": 6,
+        "buffersize": 2097152,
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": False,
+        "restrictfilenames": True,
+        "nocheckcertificate": True,
+        "socket_timeout": 14,
+        "retries": 1,
+        "fragment_retries": 2,
+    }
+
+    if is_audio:
+        ydl_options["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }]
+    else:
+        ydl_options["merge_output_format"] = "mp4"
+        ydl_options["postprocessor_args"] = {"ffmpeg": ["-c", "copy"]}
+
+    js_cfg = get_js_runtimes_config()
+    if js_cfg:
+        ydl_options["js_runtimes"] = js_cfg
+    if YOUTUBE_PROXY:
+        ydl_options["proxy"] = YOUTUBE_PROXY
+    if cookie_file:
+        ydl_options["cookiefile"] = cookie_file
+
+    try:
+        downloaded_info = None
+        try:
+            with yt_dlp.YoutubeDL(cast(Any, ydl_options)) as ydl:
+                downloaded_info = ydl.extract_info(youtube_url, download=True)
+        except Exception as primary_err:
+            print("YOUTUBE PRIMARY DOWNLOAD RETRYING WITH ANDROID CLIENT:", repr(primary_err))
+            fallback_opts = dict(ydl_options)
+            fallback_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+            try:
+                with yt_dlp.YoutubeDL(cast(Any, fallback_opts)) as ydl:
+                    downloaded_info = ydl.extract_info(youtube_url, download=True)
+            except Exception as f_err:
+                print("YOUTUBE ANDROID CLIENT DOWNLOAD ERROR:", repr(f_err))
+
+        if downloaded_info:
+            title = downloaded_info.get("title") or "youtube-video"
+            downloaded_file = find_downloaded_file(downloaded_info, title) or find_downloaded_file()
+            if downloaded_file and os.path.isfile(downloaded_file):
+                actual_name = os.path.basename(downloaded_file)
+                FILE_NAME_ALIASES[expected_filename] = downloaded_file
+                if video_id:
+                    FILE_NAME_ALIASES[video_id] = downloaded_file
+                if actual_name != expected_filename:
+                    alias_path = os.path.join(DOWNLOAD_DIR, expected_filename)
+                    if not os.path.exists(alias_path):
+                        try:
+                            if hasattr(os, "link"):
+                                os.link(downloaded_file, alias_path)
+                            else:
+                                shutil.copyfile(downloaded_file, alias_path)
+                        except Exception:
+                            pass
+    except Exception as err:
+        print(f"Error in background download for {youtube_url}:", repr(err))
+    finally:
+        event.set()
+        if cookie_file and os.path.exists(cookie_file):
+            try:
+                os.unlink(cookie_file)
+            except Exception:
+                pass
+
+
 @app.post("/download-youtube")
 @app.post("/api/download-youtube")
 def download_youtube(payload: DownloadRequest, request: Request):
@@ -545,179 +718,198 @@ def download_youtube(payload: DownloadRequest, request: Request):
         )
 
     cleanup_downloads()
+    now = time.time()
+    quality = (payload.quality or "720p").lower().strip()
+    is_audio = quality in ("mp3", "audio")
+
+    # 1. Check in-memory metadata cache for instant response (< 5ms)
+    cached_info = None
+    if youtube_url in METADATA_CACHE:
+        cached_data, cached_at = METADATA_CACHE[youtube_url]
+        if now - cached_at < CACHE_TTL_SECONDS:
+            cached_info = cached_data
+
     cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_B64, "saveall-youtube-")
+    info = cached_info
 
-    output_template = os.path.join(DOWNLOAD_DIR, "%(title).50s-%(id)s.%(ext)s")
-    # Tier 1 format priority: Progressive 18/22 first for 1s single-stream download, then 720p multiplex
-    ydl_options: Any = {
-        "format": "18/22/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best",
-        "outtmpl": output_template,
-        "noplaylist": True,
-        "merge_output_format": "mp4",
-        "ffmpeg_location": FFMPEG_PATH or FFMPEG_DIR,
-        "concurrent_fragment_downloads": 6,
-        "buffersize": 1048576,
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": False,
-        "restrictfilenames": True,
-        "nocheckcertificate": True,
-        "remote_components": ["ejs:github"],
-        "socket_timeout": 30,
-        "retries": 3,
-        "fragment_retries": 3,
-    }
-
-    # When NO proxy is present (direct cloud datacenter connection),
-    # use mobile clients to avoid datacenter bot protection
-    if not YOUTUBE_PROXY:
-        ydl_options["extractor_args"] = {
-            "youtube": {
-                "player_client": ["android", "ios", "mweb"]
-            }
+    if not info:
+        fast_opts: Any = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+            "socket_timeout": 8,
+            "retries": 1,
+            "nocheckcertificate": True,
         }
+        js_cfg = get_js_runtimes_config()
+        if js_cfg:
+            fast_opts["js_runtimes"] = js_cfg
+        if YOUTUBE_PROXY:
+            fast_opts["proxy"] = YOUTUBE_PROXY
+        if cookie_file:
+            fast_opts["cookiefile"] = cookie_file
 
-    js_cfg = get_js_runtimes_config()
-    if js_cfg:
-        ydl_options["js_runtimes"] = js_cfg
-    if YOUTUBE_PROXY:
-        ydl_options["proxy"] = YOUTUBE_PROXY
-    if cookie_file:
-        ydl_options["cookiefile"] = cookie_file
-
-    info = None
-    try:
         try:
-            with yt_dlp.YoutubeDL(cast(Any, ydl_options)) as ydl:
-                info = ydl.extract_info(youtube_url, download=True)
-        except Exception as primary_err:
-            err_str = str(primary_err).lower()
-            print("YOUTUBE PRIMARY DOWNLOAD ATTEMPT ERROR:", repr(primary_err))
-
-            # Prepare direct fallback options WITHOUT proxy
-            direct_fallback_opts = dict(ydl_options)
-            direct_fallback_opts.pop("proxy", None)
-            direct_fallback_opts["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["android", "ios", "mweb"]
-                }
-            }
-
-            last_err = primary_err
-            # Failover 1: Direct datacenter connection with Android/iOS client
             try:
-                print("YOUTUBE RETRYING FAILOVER 1 (Direct connection / Mobile client)...")
-                with yt_dlp.YoutubeDL(cast(Any, direct_fallback_opts)) as ydl:
-                    info = ydl.extract_info(youtube_url, download=True)
-            except Exception as f1_err:
-                print("YOUTUBE FAILOVER 1 ERROR:", repr(f1_err))
-                last_err = f1_err
+                with yt_dlp.YoutubeDL(cast(Any, fast_opts)) as ydl:
+                    info = ydl.extract_info(youtube_url, download=False)
+            except Exception as primary_err:
+                # If datacenter or web blocked, fallback to android client for info extraction
+                fallback_opts = dict(fast_opts)
+                fallback_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+                with yt_dlp.YoutubeDL(cast(Any, fallback_opts)) as ydl:
+                    info = ydl.extract_info(youtube_url, download=False)
 
-                # Failover 2: Flexible transcode muxing with broader format selector
-                try:
-                    print("YOUTUBE RETRYING FAILOVER 2 (Flexible format & muxing)...")
-                    f2_opts = dict(direct_fallback_opts)
-                    f2_opts["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best"
-                    f2_opts["extractor_args"] = {
-                        "youtube": {
-                            "player_client": ["ios", "android"]
-                        }
-                    }
-                    with yt_dlp.YoutubeDL(cast(Any, f2_opts)) as ydl:
-                        info = ydl.extract_info(youtube_url, download=True)
-                except Exception as f2_err:
-                    print("YOUTUBE FAILOVER 2 ERROR:", repr(f2_err))
-                    last_err = f2_err
+            if info:
+                METADATA_CACHE[youtube_url] = (info, now)
+        except HTTPException:
+            raise
+        except Exception as error:
+            msg = str(error)
+            print("YOUTUBE YT-DLP ERROR:", repr(error))
+            cleanup_failed_artifacts()
 
-                    # Failover 3: Mobile Web fallback
-                    try:
-                        print("YOUTUBE RETRYING FAILOVER 3 (Mobile Web fallback)...")
-                        f3_opts = dict(direct_fallback_opts)
-                        f3_opts["extractor_args"] = {
-                            "youtube": {
-                                "player_client": ["mweb", "android"]
-                            }
-                        }
-                        f3_opts["format"] = "bestvideo+bestaudio/best"
-                        with yt_dlp.YoutubeDL(cast(Any, f3_opts)) as ydl:
-                            info = ydl.extract_info(youtube_url, download=True)
-                    except Exception as f3_err:
-                        print("YOUTUBE FAILOVER 3 ERROR:", repr(f3_err))
-                        last_err = f3_err
+            if "private" in msg.lower() or "unavailable" in msg.lower() or "removed" in msg.lower() or "not exist" in msg.lower():
+                detail = "This YouTube video is private, restricted, or unavailable."
+            elif "members only" in msg.lower() or "premium" in msg.lower() or "purchase" in msg.lower():
+                detail = "This YouTube video requires membership or purchase and cannot be downloaded."
+            elif "tunnel" in msg.lower() or "407" in msg.lower() or "402" in msg.lower():
+                detail = "The proxy server connection failed or credentials expired. Please check your proxy settings in Render."
+            elif "sign in" in msg.lower() or "bot" in msg.lower() or "429" in msg.lower() or "confirm you're not a bot" in msg.lower() or "cookies" in msg.lower():
+                detail = "YouTube blocked cloud datacenter access (bot protection). Please run the local backend server (start-dev.bat) for instant downloads, or configure YOUTUBE_COOKIES_B64 in Render."
+            else:
+                first_line = msg.split("\n")[0].strip()
+                detail = f"Unable to process this YouTube link from the server. ({first_line[:120]})"
 
-                        # Failover 4: Universal fallback without extractor args
-                        try:
-                            print("YOUTUBE RETRYING FAILOVER 4 (Universal fallback)...")
-                            f4_opts = dict(direct_fallback_opts)
-                            f4_opts.pop("extractor_args", None)
-                            f4_opts["format"] = "best"
-                            with yt_dlp.YoutubeDL(cast(Any, f4_opts)) as ydl:
-                                info = ydl.extract_info(youtube_url, download=True)
-                        except Exception as f4_err:
-                            print("YOUTUBE FAILOVER 4 ERROR:", repr(f4_err))
-                            raise last_err
+            raise HTTPException(status_code=400, detail=detail)
 
-        if not info:
-            raise HTTPException(
-                status_code=500,
-                detail="YouTube metadata extraction returned no results.",
-            )
+    if not info:
+        raise HTTPException(
+            status_code=500,
+            detail="YouTube metadata extraction returned no results.",
+        )
 
-        title = info.get("title") or "youtube-video"
-        downloaded_file = find_downloaded_file(info, title) or find_downloaded_file()
-        file_name = os.path.basename(downloaded_file) if downloaded_file else None
+    title = info.get("title") or "youtube-video"
+    video_id = str(info.get("id") or "video")
 
-        if not file_name:
-            raise HTTPException(
-                status_code=500,
-                detail="YouTube media file was not saved successfully.",
-            )
+    # Determine media badge (Shorts vs Video)
+    duration = info.get("duration") or 0
+    is_shorts = "/shorts/" in youtube_url or (duration <= 60 and (info.get("height") or 0) > (info.get("width") or 0))
+    media_badge = "YouTube Shorts" if is_shorts else "YouTube Video"
 
-        filesize = os.path.getsize(downloaded_file) if downloaded_file and os.path.exists(downloaded_file) else None
-        base_url = get_public_base_url(request)
-        download_url = f"{base_url}/download-file?filename={quote(file_name)}"
+    # Inspect formats to find available resolutions & sizes
+    has_1080p = False
+    size_1080 = None
+    size_720 = None
+    size_360 = None
+    size_audio = None
 
-        return {
-            "success": True,
-            "status": "ready",
-            "message": "YouTube video is ready to download.",
-            "title": title,
-            "url": youtube_url,
-            "platform": "YouTube",
-            "file_name": file_name,
-            "download_url": download_url,
-            "thumbnail": info.get("thumbnail"),
-            "duration": info.get("duration"),
-            "uploader": info.get("uploader") or info.get("channel"),
-            "filesize": filesize,
-        }
+    for f in info.get("formats", []):
+        h = f.get("height") or 0
+        sz = f.get("filesize") or f.get("filesize_approx")
+        if h >= 1080:
+            has_1080p = True
+            if sz and (not size_1080 or sz > size_1080):
+                size_1080 = sz
+        elif h >= 720:
+            if sz and (not size_720 or sz > size_720):
+                size_720 = sz
+        elif h >= 360:
+            if sz and (not size_360 or sz > size_360):
+                size_360 = sz
+        if f.get("vcodec") == "none" and sz:
+            if not size_audio or sz > size_audio:
+                size_audio = sz
 
-    except HTTPException:
-        raise
-    except Exception as error:
-        msg = str(error)
-        print("YOUTUBE YT-DLP ERROR:", repr(error))
-        cleanup_failed_artifacts()
+    qualities = []
+    if has_1080p:
+        qualities.append({
+            "id": "1080p",
+            "label": "MP4 1080p",
+            "quality": "1080p",
+            "ext": "mp4",
+            "type": "video",
+            "badge": "Full HD",
+            "filesize": size_1080,
+        })
+    qualities.append({
+        "id": "720p",
+        "label": "MP4 720p",
+        "quality": "720p",
+        "ext": "mp4",
+        "type": "video",
+        "badge": "HD • Recommended",
+        "filesize": size_720 or info.get("filesize") or info.get("filesize_approx"),
+        "is_default": True,
+    })
+    qualities.append({
+        "id": "360p",
+        "label": "MP4 360p",
+        "quality": "360p",
+        "ext": "mp4",
+        "type": "video",
+        "badge": "Data Saver",
+        "filesize": size_360,
+    })
+    qualities.append({
+        "id": "mp3",
+        "label": "MP3 Audio",
+        "quality": "mp3",
+        "ext": "mp3",
+        "type": "audio",
+        "badge": "Audio",
+        "filesize": size_audio,
+    })
 
-        if "private" in msg.lower() or "unavailable" in msg.lower() or "removed" in msg.lower() or "not exist" in msg.lower():
-            detail = "This YouTube video is private, restricted, or unavailable."
-        elif "members only" in msg.lower() or "premium" in msg.lower() or "purchase" in msg.lower():
-            detail = "This YouTube video requires membership or purchase and cannot be downloaded."
-        elif "tunnel" in msg.lower() or "407" in msg.lower() or "402" in msg.lower():
-            detail = "The proxy server connection failed or credentials expired. Please check your proxy settings in Render."
-        elif "sign in" in msg.lower() or "bot" in msg.lower() or "429" in msg.lower() or "confirm you're not a bot" in msg.lower() or "cookies" in msg.lower():
-            detail = "YouTube blocked cloud datacenter access (bot protection). Please run the local backend server (start-dev.bat) for instant downloads, or configure YOUTUBE_COOKIES_B64 in Render."
-        else:
-            first_line = msg.split("\n")[0].strip()
-            detail = f"Unable to process this YouTube link from the server. ({first_line[:120]})"
+    target_ext = "mp3" if is_audio else "mp4"
+    output_template = os.path.join(DOWNLOAD_DIR, "%(title).50s-%(id)s" + (f"-{quality}" if quality != "720p" else "") + ".%(ext)s")
+    calc_opts = {"outtmpl": output_template, "restrictfilenames": True}
+    with yt_dlp.YoutubeDL(cast(Any, calc_opts)) as calc_ydl:
+        prep_name = calc_ydl.prepare_filename(info)
+        base, _ = os.path.splitext(prep_name)
+        file_name = os.path.basename(base) + f".{target_ext}"
 
-        raise HTTPException(status_code=400, detail=detail)
-    finally:
-        if cookie_file and os.path.exists(cookie_file):
-            try:
-                os.unlink(cookie_file)
-            except Exception:
-                pass
+    # Check if this video is already downloaded and present on disk
+    existing_file = find_downloaded_file(info, title)
+    filesize = None
+    if existing_file and os.path.isfile(existing_file) and os.path.getsize(existing_file) > 1000:
+        file_name = os.path.basename(existing_file)
+        filesize = os.path.getsize(existing_file)
+    else:
+        # Register event and kick off background download immediately
+        with ACTIVE_DOWNLOAD_LOCK:
+            if file_name not in ACTIVE_DOWNLOAD_EVENTS:
+                ev = threading.Event()
+                ACTIVE_DOWNLOAD_EVENTS[file_name] = ev
+                if video_id:
+                    ACTIVE_DOWNLOAD_EVENTS[video_id] = ev
+                threading.Thread(
+                    target=perform_youtube_download,
+                    args=(youtube_url, file_name, video_id, quality, cookie_file),
+                    daemon=True,
+                ).start()
+
+    base_url = get_public_base_url(request)
+    download_url = f"{base_url}/download-file?filename={quote(file_name)}"
+
+    return {
+        "success": True,
+        "status": "ready",
+        "message": "YouTube video is ready to download.",
+        "title": title,
+        "url": youtube_url,
+        "platform": "YouTube",
+        "media_badge": media_badge,
+        "quality": quality,
+        "qualities": qualities,
+        "file_name": file_name,
+        "download_url": download_url,
+        "thumbnail": info.get("thumbnail"),
+        "duration": info.get("duration"),
+        "uploader": info.get("uploader") or info.get("channel"),
+        "filesize": filesize or size_720 or info.get("filesize") or info.get("filesize_approx"),
+    }
 
 
 @app.post("/download-instagram")
@@ -785,6 +977,30 @@ def download_instagram(payload: DownloadRequest, request: Request):
         download_url = f"{base_url}/download-file?filename={quote(file_name)}"
 
         filesize = os.path.getsize(downloaded_file) if downloaded_file and os.path.exists(downloaded_file) else None
+        is_reel = "/reel/" in instagram_url.lower() or "/reels/" in instagram_url.lower()
+        media_badge = "Instagram Reel" if is_reel else "Instagram Video"
+        qualities = [
+            {
+                "id": "720p",
+                "label": "MP4 HD",
+                "quality": "720p",
+                "ext": "mp4",
+                "type": "video",
+                "badge": "Original HD",
+                "filesize": filesize,
+                "is_default": True,
+            },
+            {
+                "id": "mp3",
+                "label": "MP3 Audio",
+                "quality": "mp3",
+                "ext": "mp3",
+                "type": "audio",
+                "badge": "Audio",
+                "filesize": None,
+            },
+        ]
+
         return {
             "success": True,
             "status": "ready",
@@ -792,6 +1008,9 @@ def download_instagram(payload: DownloadRequest, request: Request):
             "title": title,
             "url": instagram_url,
             "platform": "Instagram",
+            "media_badge": media_badge,
+            "quality": payload.quality or "720p",
+            "qualities": qualities,
             "file_name": file_name,
             "download_url": download_url,
             "thumbnail": info.get("thumbnail"),
