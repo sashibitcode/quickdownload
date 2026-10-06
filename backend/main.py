@@ -31,7 +31,7 @@ FRONTEND_ORIGINS = [
 ]
 
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "").strip().rstrip("/")
-YOUTUBE_COOKIES_B64 = os.getenv("YOUTUBE_COOKIES_B64", "").strip()
+YOUTUBE_COOKIES_B64 = (os.getenv("YT_COOKIES") or os.getenv("YOUTUBE_COOKIES_B64", "")).strip()
 INSTAGRAM_COOKIES_B64 = os.getenv("INSTAGRAM_COOKIES_B64", "").strip()
 
 
@@ -54,7 +54,9 @@ def normalize_proxy_url(raw_proxy: str | None) -> str:
     return f"http://{p}"
 
 
-YOUTUBE_PROXY = normalize_proxy_url(os.getenv("YOUTUBE_PROXY", os.getenv("HTTP_PROXY", "")))
+YOUTUBE_PROXY = normalize_proxy_url(
+    os.getenv("YT_PROXY") or os.getenv("YOUTUBE_PROXY") or os.getenv("HTTP_PROXY", "")
+)
 DOWNLOAD_DIR = os.getenv(
     "DOWNLOAD_DIR",
     os.path.join(tempfile.gettempdir(), "saveall-downloads"),
@@ -276,12 +278,25 @@ def cleanup_failed_artifacts(identifier: str | None = None):
         pass
 
 
-def create_cookie_file_from_env(encoded_cookies: str, prefix: str):
-    """Write base64-encoded Netscape cookies to a temp file and return path."""
-    if not encoded_cookies:
+def create_cookie_file_from_env(cookie_data: str, prefix: str):
+    """Write raw or base64-encoded Netscape cookies to a temp file and return path."""
+    if not cookie_data:
         return None
     try:
-        decoded = base64.b64decode(encoded_cookies, validate=True)
+        decoded: bytes | None = None
+        # Try base64 decoding first
+        try:
+            candidate = base64.b64decode(cookie_data.strip(), validate=True)
+            # Check if candidate contains text or tabs
+            if b"\t" in candidate or b"# Netscape" in candidate:
+                decoded = candidate
+        except Exception:
+            pass
+
+        # If not valid base64 or raw text provided directly
+        if not decoded:
+            decoded = cookie_data.encode("utf-8")
+
         temp_file = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".txt", delete=False)
         temp_file.write(decoded)
         temp_file.close()
@@ -333,7 +348,7 @@ def find_downloaded_file(info: dict | None = None, title: str | None = None):
 
 
 def sanitize_youtube_url(url: str) -> str:
-    """Normalize YouTube URL and remove playlist parameters to isolate the single video."""
+    """Normalize YouTube URL (including Shorts and youtu.be) and remove playlist/tracking parameters."""
     if not url:
         return ""
     clean = url.strip()
@@ -341,13 +356,30 @@ def sanitize_youtube_url(url: str) -> str:
         clean = "https://" + clean
     try:
         parsed = urlparse(clean)
-        # If it's a standard watch URL, preserve only the 'v' parameter
-        if "youtube.com" in (parsed.netloc or "").lower() and parsed.path == "/watch":
+        netloc = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+
+        # 1. Normalize youtu.be/<id> -> youtube.com/watch?v=<id>
+        if "youtu.be" in netloc:
+            video_id = path.strip("/").split("/")[0].split("?")[0]
+            if video_id:
+                return f"https://www.youtube.com/watch?v={video_id}"
+
+        # 2. Normalize youtube.com/shorts/<id> -> youtube.com/watch?v=<id>
+        if "youtube.com" in netloc and "/shorts/" in path:
+            parts = path.split("/shorts/")
+            if len(parts) > 1:
+                video_id = parts[1].strip("/").split("/")[0].split("?")[0]
+                if video_id:
+                    return f"https://www.youtube.com/watch?v={video_id}"
+
+        # 3. If standard watch URL, preserve only the 'v' parameter
+        if "youtube.com" in netloc and path == "/watch":
             from urllib.parse import parse_qs, urlencode
             qs = parse_qs(parsed.query)
             if "v" in qs and qs["v"]:
                 clean_query = urlencode({"v": qs["v"][0]})
-                return f"{parsed.scheme}://{parsed.netloc}/watch?{clean_query}"
+                return f"https://www.youtube.com/watch?{clean_query}"
     except Exception:
         pass
     return clean
@@ -601,7 +633,24 @@ def download_media(payload: DownloadRequest, request: Request):
         )
 
 
-def perform_youtube_download(youtube_url: str, expected_filename: str, video_id: str, quality: str = "720p", cookie_file: str | None = None):
+# YouTube Player Client Fallback Sequence
+YOUTUBE_CLIENT_CHAIN: list[tuple[str, list[str] | None]] = [
+    ("default", None),
+    ("tv", ["tv"]),
+    ("web_safari", ["web_safari"]),
+    ("mweb", ["mweb"]),
+    ("android", ["android"]),
+]
+
+
+def perform_youtube_download(
+    youtube_url: str,
+    expected_filename: str,
+    video_id: str,
+    quality: str = "720p",
+    cookie_file: str | None = None,
+    player_client: list[str] | None = None,
+):
     event = None
     with ACTIVE_DOWNLOAD_LOCK:
         event = ACTIVE_DOWNLOAD_EVENTS.get(expected_filename)
@@ -633,17 +682,25 @@ def perform_youtube_download(youtube_url: str, expected_filename: str, video_id:
         "outtmpl": output_template,
         "noplaylist": True,
         "ffmpeg_location": FFMPEG_PATH or FFMPEG_DIR,
-        "concurrent_fragment_downloads": 6,
-        "buffersize": 2097152,
+        "concurrent_fragment_downloads": 4,
+        "buffersize": 1048576,
         "quiet": True,
         "no_warnings": True,
         "skip_download": False,
         "restrictfilenames": True,
         "nocheckcertificate": True,
-        "socket_timeout": 14,
-        "retries": 1,
+        "geo_bypass": True,
+        "socket_timeout": 15,
+        "retries": 2,
         "fragment_retries": 2,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
+
+    if player_client:
+        ydl_options["extractor_args"] = {"youtube": {"player_client": player_client}}
 
     if is_audio:
         ydl_options["postprocessors"] = [{
@@ -665,18 +722,28 @@ def perform_youtube_download(youtube_url: str, expected_filename: str, video_id:
 
     try:
         downloaded_info = None
+        # Try primary options first
         try:
             with yt_dlp.YoutubeDL(cast(Any, ydl_options)) as ydl:
                 downloaded_info = ydl.extract_info(youtube_url, download=True)
         except Exception as primary_err:
-            print("YOUTUBE PRIMARY DOWNLOAD RETRYING WITH ANDROID CLIENT:", repr(primary_err))
-            fallback_opts = dict(ydl_options)
-            fallback_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
-            try:
-                with yt_dlp.YoutubeDL(cast(Any, fallback_opts)) as ydl:
-                    downloaded_info = ydl.extract_info(youtube_url, download=True)
-            except Exception as f_err:
-                print("YOUTUBE ANDROID CLIENT DOWNLOAD ERROR:", repr(f_err))
+            print("PRIMARY YOUTUBE DOWNLOAD FAILED, RETRYING WITH FALLBACK CHAIN:", repr(primary_err))
+            for candidate_name, candidate_client in YOUTUBE_CLIENT_CHAIN:
+                if candidate_client == player_client:
+                    continue
+                fb_opts = dict(ydl_options)
+                if candidate_client:
+                    fb_opts["extractor_args"] = {"youtube": {"player_client": candidate_client}}
+                else:
+                    fb_opts.pop("extractor_args", None)
+                try:
+                    with yt_dlp.YoutubeDL(cast(Any, fb_opts)) as ydl:
+                        downloaded_info = ydl.extract_info(youtube_url, download=True)
+                    if downloaded_info:
+                        print(f"FALLBACK YOUTUBE DOWNLOAD SUCCEEDED WITH '{candidate_name}'")
+                        break
+                except Exception as fb_err:
+                    print(f"Fallback download with '{candidate_name}' failed:", repr(fb_err))
 
         if downloaded_info:
             title = downloaded_info.get("title") or "youtube-video"
@@ -731,6 +798,7 @@ def download_youtube(payload: DownloadRequest, request: Request):
 
     cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_B64, "saveall-youtube-")
     info = cached_info
+    successful_client = None
 
     if not info:
         fast_opts: Any = {
@@ -738,9 +806,14 @@ def download_youtube(payload: DownloadRequest, request: Request):
             "no_warnings": True,
             "noplaylist": True,
             "skip_download": True,
-            "socket_timeout": 8,
-            "retries": 1,
+            "socket_timeout": 15,
+            "retries": 2,
             "nocheckcertificate": True,
+            "geo_bypass": True,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
         js_cfg = get_js_runtimes_config()
         if js_cfg:
@@ -750,39 +823,45 @@ def download_youtube(payload: DownloadRequest, request: Request):
         if cookie_file:
             fast_opts["cookiefile"] = cookie_file
 
-        try:
+        last_error = None
+        for client_name, client_args in YOUTUBE_CLIENT_CHAIN:
+            candidate_opts = dict(fast_opts)
+            if client_args:
+                candidate_opts["extractor_args"] = {"youtube": {"player_client": client_args}}
             try:
-                with yt_dlp.YoutubeDL(cast(Any, fast_opts)) as ydl:
-                    info = ydl.extract_info(youtube_url, download=False)
-            except Exception as primary_err:
-                # If datacenter or web blocked, fallback to android client for info extraction
-                fallback_opts = dict(fast_opts)
-                fallback_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
-                with yt_dlp.YoutubeDL(cast(Any, fallback_opts)) as ydl:
-                    info = ydl.extract_info(youtube_url, download=False)
+                with yt_dlp.YoutubeDL(cast(Any, candidate_opts)) as ydl:
+                    extracted = ydl.extract_info(youtube_url, download=False)
+                    if extracted and (extracted.get("formats") or extracted.get("title")):
+                        info = extracted
+                        successful_client = client_args
+                        print(f"[yt-dlp] Client '{client_name}' extraction SUCCEEDED for {youtube_url}")
+                        break
+            except Exception as client_err:
+                last_error = client_err
+                print(f"[yt-dlp] Client '{client_name}' extraction failed for {youtube_url}: {repr(client_err)}")
+                continue
 
-            if info:
-                METADATA_CACHE[youtube_url] = (info, now)
-        except HTTPException:
-            raise
-        except Exception as error:
-            msg = str(error)
-            print("YOUTUBE YT-DLP ERROR:", repr(error))
+        if not info and last_error:
             cleanup_failed_artifacts()
+            err_str = str(last_error)
+            print("ALL YOUTUBE CLIENTS FAILED. Last error:", repr(last_error))
 
-            if "private" in msg.lower() or "unavailable" in msg.lower() or "removed" in msg.lower() or "not exist" in msg.lower():
+            # Sanitize error message: never leak raw yt-dlp error text or GitHub issues links
+            if "private" in err_str.lower() or "unavailable" in err_str.lower() or "removed" in err_str.lower():
                 detail = "This YouTube video is private, restricted, or unavailable."
-            elif "members only" in msg.lower() or "premium" in msg.lower() or "purchase" in msg.lower():
-                detail = "This YouTube video requires membership or purchase and cannot be downloaded."
-            elif "tunnel" in msg.lower() or "407" in msg.lower() or "402" in msg.lower():
-                detail = "The proxy server connection failed or credentials expired. Please check your proxy settings in Render."
-            elif "sign in" in msg.lower() or "bot" in msg.lower() or "429" in msg.lower() or "confirm you're not a bot" in msg.lower() or "cookies" in msg.lower():
-                detail = "YouTube blocked cloud datacenter access (bot protection). Please run the local backend server (start-dev.bat) for instant downloads, or configure YOUTUBE_COOKIES_B64 in Render."
+            elif "members only" in err_str.lower() or "premium" in err_str.lower() or "purchase" in err_str.lower():
+                detail = "This YouTube video requires channel membership or purchase."
+            elif "sign in" in err_str.lower() or "bot" in err_str.lower() or "429" in err_str.lower() or "cookies" in err_str.lower():
+                detail = "YouTube temporarily limited server access. Please try again shortly or configure proxy/cookies."
+            elif "age" in err_str.lower() or "inappropriate" in err_str.lower():
+                detail = "This YouTube video is age-restricted and requires account authentication."
             else:
-                first_line = msg.split("\n")[0].strip()
-                detail = f"Unable to process this YouTube link from the server. ({first_line[:120]})"
+                detail = "Unable to process this YouTube video from the server. Please check the link and try again."
 
             raise HTTPException(status_code=400, detail=detail)
+
+        if info:
+            METADATA_CACHE[youtube_url] = (info, now)
 
     if not info:
         raise HTTPException(
@@ -862,6 +941,28 @@ def download_youtube(payload: DownloadRequest, request: Request):
         "filesize": size_audio,
     })
 
+    # Extract direct stream URLs where available
+    direct_stream_urls: dict[str, str] = {}
+    for f in info.get("formats", []):
+        f_url = f.get("url")
+        if not f_url or not f_url.startswith("http"):
+            continue
+        h = f.get("height") or 0
+        vcodec = f.get("vcodec") or "none"
+        acodec = f.get("acodec") or "none"
+        if vcodec != "none" and acodec != "none":
+            if h >= 1080 and "1080p" not in direct_stream_urls:
+                direct_stream_urls["1080p"] = f_url
+            elif h >= 720 and "720p" not in direct_stream_urls:
+                direct_stream_urls["720p"] = f_url
+            elif h >= 360 and "360p" not in direct_stream_urls:
+                direct_stream_urls["360p"] = f_url
+        elif vcodec == "none" and acodec != "none" and "mp3" not in direct_stream_urls:
+            direct_stream_urls["mp3"] = f_url
+
+    for q in qualities:
+        q["direct_url"] = direct_stream_urls.get(q["id"])
+
     target_ext = "mp3" if is_audio else "mp4"
     output_template = os.path.join(DOWNLOAD_DIR, "%(title).50s-%(id)s" + (f"-{quality}" if quality != "720p" else "") + ".%(ext)s")
     calc_opts = {"outtmpl": output_template, "restrictfilenames": True}
@@ -886,12 +987,13 @@ def download_youtube(payload: DownloadRequest, request: Request):
                     ACTIVE_DOWNLOAD_EVENTS[video_id] = ev
                 threading.Thread(
                     target=perform_youtube_download,
-                    args=(youtube_url, file_name, video_id, quality, cookie_file),
+                    args=(youtube_url, file_name, video_id, quality, cookie_file, successful_client),
                     daemon=True,
                 ).start()
 
     base_url = get_public_base_url(request)
     download_url = f"{base_url}/download-file?filename={quote(file_name)}"
+    direct_url = direct_stream_urls.get(quality) or direct_stream_urls.get("720p")
 
     return {
         "success": True,
@@ -905,6 +1007,7 @@ def download_youtube(payload: DownloadRequest, request: Request):
         "qualities": qualities,
         "file_name": file_name,
         "download_url": download_url,
+        "direct_url": direct_url,
         "thumbnail": info.get("thumbnail"),
         "duration": info.get("duration"),
         "uploader": info.get("uploader") or info.get("channel"),
