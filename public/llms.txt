@@ -1,0 +1,25 @@
+# QuickDownload — Pro Media Downloader
+
+> High-performance, clean media extraction tool for Instagram Reels & YouTube Videos/Shorts with zero compression, sub-second metadata parsing, and privacy-first direct downloads.
+
+Created and engineered by **Shashikant Raj | Data Analyst** (Brand: **SASHIBITCODE**).
+
+- **Canonical URL**: https://quick-d.vercel.app/
+- **Creator Portfolio**: https://sashibitcode.vercel.app/
+- **GitHub Repository**: https://github.com/sashibitcode/quickdownload
+- **Full Architecture & Spec**: https://quick-d.vercel.app/llms-full.txt
+
+## Key Capabilities
+- **YouTube Downloader**: High-definition video, audio extraction, and shorts normalization with resilient player client fallback chain.
+- **Instagram Downloader**: Public reels, clips, and posts extraction with session cookie authentication support.
+- **Speed & Reliability**: In-memory metadata caching, background streaming download queue, and automatic temporary file garbage collection.
+- **Design System**: Cinematic cyberpunk glassmorphism UI built with Vite, React, and Vanilla CSS.
+- **Privacy Guarantee**: No database tracking, no analytics telemetry, zero advertisement popups.
+
+## Developer Identity & E-E-A-T
+- **Author**: Shashikant Raj
+- **Brand Title**: Shashikant Raj | Data Analyst
+- **Job Title**: Data Analyst
+- **Brand**: SASHIBITCODE
+- **LinkedIn**: https://www.linkedin.com/in/sashibitcode/
+- **GitHub**: https://github.com/sashibitcode

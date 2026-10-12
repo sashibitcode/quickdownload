@@ -1,0 +1,63 @@
+# QuickDownload — Complete Technical Architecture & Specification
+
+## Executive Summary
+QuickDownload is a modern, high-throughput media extraction web application designed and maintained by **Shashikant Raj | Data Analyst** under the **SASHIBITCODE** brand. The platform allows users to extract video streams from YouTube and Instagram without quality degradation, intrusive ads, or complex software installations.
+
+- **Frontend URL**: https://quick-d.vercel.app/
+- **Developer Portfolio**: https://sashibitcode.vercel.app/
+- **Source Code**: https://github.com/sashibitcode/quickdownload
+- **License**: MIT License
+
+---
+
+## Technical Specifications
+
+| Parameter | Specification | Details |
+| :--- | :--- | :--- |
+| **Frontend Framework** | React 18 + Vite | Modular functional components with hooks |
+| **Styling Engine** | Vanilla CSS Glassmorphism | Custom design system, responsive mobile drawer |
+| **Backend Framework** | FastAPI (Python 3.11+) | Async ASGI server with uvicorn |
+| **Extraction Engine** | yt-dlp Core | Multi-client player fallback (Android, Web, iOS) |
+| **Hosting (Frontend)** | Vercel Serverless Edge | Edge network CDN distribution |
+| **Hosting (Backend)** | Render / Docker Container | Auto-scaling background worker container |
+| **Cache Layer** | In-Memory Sliding TTL | Instant repeat URL queries |
+| **Garbage Collection** | Automated TTL Purge | Files older than 30 minutes purged automatically |
+
+---
+
+## API Endpoints
+
+1. `GET /api/health`
+   - Returns service status and runtime diagnostics.
+2. `POST /api/info`
+   - Extracts title, duration, thumbnail, author, and available format resolutions.
+3. `POST /api/download-youtube`
+   - Normalizes YouTube URLs/Shorts, extracts media, and returns a direct temporary download URL.
+4. `POST /api/download-instagram`
+   - Parses Instagram Reel/Post URLs and prepares verified MP4 streams.
+5. `GET /api/download-file?filename=...`
+   - Streams downloaded media directly to the user client.
+
+---
+
+## AEO (Frequently Asked Questions)
+
+### Q: Is QuickDownload completely free to use?
+A: Yes, QuickDownload is 100% free with no subscription tiers, paywalls, or third-party ads.
+
+### Q: Who built QuickDownload?
+A: QuickDownload was engineered by Shashikant Raj, a professional Data Analyst and full-stack developer known as SASHIBITCODE.
+
+### Q: Can QuickDownload download 1080p and 4K YouTube videos?
+A: Yes, QuickDownload supports extraction of resolutions from 360p up to 4K depending on source availability.
+
+---
+
+## Author & Verification
+- **Author**: Shashikant Raj
+- **Title**: Shashikant Raj | Data Analyst
+- **Job Title**: Data Analyst
+- **Brand**: SASHIBITCODE
+- **Portfolio**: https://sashibitcode.vercel.app/
+- **LinkedIn**: https://www.linkedin.com/in/sashibitcode/
+- **GitHub**: https://github.com/sashibitcode
