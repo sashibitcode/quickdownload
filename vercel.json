@@ -5,7 +5,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://saveall-api.onrender.com/api/:path*"
+      "destination": "https://quickdownload-api.onrender.com/api/:path*"
     }
   ]
 }

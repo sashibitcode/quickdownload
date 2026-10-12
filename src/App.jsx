@@ -4,12 +4,12 @@ import { SITE_CONFIG } from "./config";
 
 // Resolve API Base URL:
 // 1. Check VITE_API_URL or VITE_API_BASE_URL
-// 2. In production, default to canonical deployed Render backend: https://saveall-api.onrender.com
+// 2. In production, default to canonical deployed Render backend: https://quickdownload-api.onrender.com
 // 3. In local development, default to /api (proxied by Vite to http://127.0.0.1:8000)
 const envApiUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL)?.trim();
 const API_BASE_URL = (
   envApiUrl ||
-  (import.meta.env.PROD ? "https://saveall-api.onrender.com" : "/api")
+  (import.meta.env.PROD ? "https://quickdownload-api.onrender.com" : "/api")
 ).replace(/\/$/, "");
 
 function getApiConfigurationError() {
@@ -853,7 +853,7 @@ function App() {
 
       const link = document.createElement("a");
       link.href = fileUrl;
-      link.download = result.fileName || `saveall-${selectedQuality}.mp4`;
+      link.download = result.fileName || `quickdownload-${selectedQuality}.mp4`;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       document.body.appendChild(link);

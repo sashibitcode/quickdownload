@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: saveall-api
+    name: quickdownload-api
     runtime: docker
     plan: free
     dockerfilePath: backend/Dockerfile

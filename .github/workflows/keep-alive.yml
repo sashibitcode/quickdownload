@@ -14,8 +14,8 @@ jobs:
     steps:
       - name: Send Keep-Alive Ping
         run: |
-          echo "Pinging SAVEALL API health check..."
-          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" --max-time 60 "https://saveall-api.onrender.com/api/health")
+          echo "Pinging QuickDownload API health check..."
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" --max-time 60 "https://quickdownload-api.onrender.com/api/health")
           echo "HTTP Status Code: $HTTP_STATUS"
           echo "Response Body:"
           cat response.txt

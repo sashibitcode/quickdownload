@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ SAVEALL — Pro Media Downloader
+# ⚡ QuickDownload — Pro Media Downloader
 
 <p align="center">
   <strong>Ultra-Fast, Lossless & Cinematic All-in-One Media Downloader for YouTube & Instagram</strong>
@@ -38,7 +38,7 @@
 
 ## 🌟 Overview
 
-**SAVEALL** is a modern, full-stack media extraction application crafted with a **cinematic cyberpunk/dark-mode aesthetic** and powered by an industrial-grade **Python FastAPI** backend. It allows users to effortlessly download high-definition videos, reels, and shorts from **YouTube** and **Instagram** directly to their devices without annoying ads, shady popups, or quality degradation.
+**QuickDownload** is a modern, full-stack media extraction application crafted with a **cinematic cyberpunk/dark-mode aesthetic** and powered by an industrial-grade **Python FastAPI** backend. It allows users to effortlessly download high-definition videos, reels, and shorts from **YouTube** and **Instagram** directly to their devices without annoying ads, shady popups, or quality degradation.
 
 The frontend is built on **React 19** and **Vite**, featuring platform-reactive ambient backdrops, animated progress indicators, instant clipboard integration, and rich video metadata previews (title, author, duration, file size, thumbnail).
 
@@ -136,7 +136,7 @@ flowchart TD
 ## 📁 Project Structure
 
 ```text
-saveall-main/
+quickdownload-main/
 ├── .env.example            # Environment variables blueprint
 ├── .gitignore              # Git ignore rules
 ├── .oxlintrc.json          # Oxlint configuration
@@ -228,7 +228,7 @@ Vite will start at `http://localhost:5173`.
 
 ### Base URLs
 - **Local:** `http://127.0.0.1:8000` (or proxied via `http://localhost:5173/api`)
-- **Production:** `https://saveall-api.onrender.com`
+- **Production:** `https://quickdownload-api.onrender.com`
 
 ---
 
@@ -258,7 +258,7 @@ Automatically detects whether the URL is from YouTube or Instagram and initiates
   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "platform": "YouTube",
   "file_name": "Rick Astley - Never Gonna Give You Up-dQw4w9WgXcQ.mp4",
-  "download_url": "https://saveall-api.onrender.com/download-file?filename=Rick+Astley...",
+  "download_url": "https://quickdownload-api.onrender.com/download-file?filename=Rick+Astley...",
   "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
   "duration": 213,
   "uploader": "Rick Astley",
@@ -305,7 +305,7 @@ Serves the downloaded binary MP4 file with proper attachment headers for instant
   ```
 - **Temp Storage Check:** `GET /download-folder` or `GET /api/download-folder`
   ```json
-  { "success": true, "folder": "/tmp/saveall-downloads", "exists": true }
+  { "success": true, "folder": "/tmp/quickdownload-downloads", "exists": true }
   ```
 
 ---
@@ -317,13 +317,13 @@ Configure these variables in your deployment environments or in a local `.env` f
 ### Frontend (`Vercel` / `.env`)
 | Variable | Required | Description | Default |
 | :--- | :---: | :--- | :--- |
-| `VITE_API_URL` | No | Full URL of the production backend API. | `https://saveall-api.onrender.com` |
+| `VITE_API_URL` | No | Full URL of the production backend API. | `https://quickdownload-api.onrender.com` |
 | `VITE_API_BASE_URL` | No | Alternate alias for `VITE_API_URL`. | *(Same as above)* |
 
 ### Backend (`Render` / Server Environment)
 | Variable | Required | Description | Default |
 | :--- | :---: | :--- | :--- |
-| `FRONTEND_ORIGIN` | No | Primary allowed origin for CORS requests. | `https://saveall.vercel.app` |
+| `FRONTEND_ORIGIN` | No | Primary allowed origin for CORS requests. | `https://quick-d.vercel.app` |
 | `FRONTEND_ORIGINS` | No | Comma-separated list of additional allowed frontend origins. | *(Empty)* |
 | `PUBLIC_API_URL` | No | Canonical public HTTPS URL for generating download links. | Auto-detected from Host header |
 | `PORT` | No | Port on which the FastAPI server listens. | `8000` (or `10000` on Render) |
@@ -361,7 +361,7 @@ Configure these variables in your deployment environments or in a local `.env` f
 > **Keep Render Awake 24/7 (Prevent Cold Starts):**
 > Render free web services go to sleep after 15 minutes of inactivity, causing 50+ second cold start delays.
 > - **Automated (Included):** Push to GitHub to enable the pre-configured workflow [`.github/workflows/keep-alive.yml`](.github/workflows/keep-alive.yml) which pings `/api/health` every 10 minutes.
-> - **External (cron-job.org):** Create a free cron job on [cron-job.org](https://cron-job.org) targeting `https://saveall-api.onrender.com/api/health` every **10 minutes** (`*/10 * * * *`).
+> - **External (cron-job.org):** Create a free cron job on [cron-job.org](https://cron-job.org) targeting `https://quickdownload-api.onrender.com/api/health` every **10 minutes** (`*/10 * * * *`).
 
 ---
 
@@ -372,7 +372,7 @@ Configure these variables in your deployment environments or in a local `.env` f
    - **Build Command:** `npm run build`
    - **Output Directory:** `dist`
 4. Under **Environment Variables**, add:
-   - `VITE_API_URL`: Your deployed Render API URL (e.g. `https://saveall-api.onrender.com`).
+   - `VITE_API_URL`: Your deployed Render API URL (e.g. `https://quickdownload-api.onrender.com`).
 5. Click **Deploy**.
 6. The included [`vercel.json`](vercel.json) automatically proxies `/api/*` requests to your Render service to prevent CORS and mixed-content issues!
 
@@ -384,10 +384,10 @@ You can build and test the production Docker container locally:
 
 ```bash
 # Build the container
-docker build -t saveall-api -f backend/Dockerfile backend
+docker build -t quickdownload-api -f backend/Dockerfile backend
 
 # Run the container on port 8000
-docker run -p 8000:10000 -e PORT=10000 saveall-api
+docker run -p 8000:10000 -e PORT=10000 quickdownload-api
 ```
 
 ---
@@ -429,19 +429,19 @@ YouTube frequently blocks requests originating from datacenter IP addresses (lik
 <details>
 <summary><strong>2. Instagram downloads fail with "Private content or requires login"</strong></summary>
 
-Instagram restricts access to private profiles, age-gated reels, and certain audio tracks. SAVEALL is designed for public reels, posts, and IGTV links. Supplying `INSTAGRAM_COOKIES_B64` helps access content that requires standard session authentication.
+Instagram restricts access to private profiles, age-gated reels, and certain audio tracks. QuickDownload is designed for public reels, posts, and IGTV links. Supplying `INSTAGRAM_COOKIES_B64` helps access content that requires standard session authentication.
 </details>
 
 <details>
 <summary><strong>3. Mixed Content Warning in Browser</strong></summary>
 
-If your frontend is deployed on an HTTPS domain (e.g. `https://saveall.vercel.app`), your backend API **must also use HTTPS** (`https://saveall-api.onrender.com`). Browsers block HTTP requests from HTTPS sites. SAVEALL includes built-in safeguards to enforce HTTPS in production.
+If your frontend is deployed on an HTTPS domain (e.g. `https://quick-d.vercel.app`), your backend API **must also use HTTPS** (`https://quickdownload-api.onrender.com`). Browsers block HTTP requests from HTTPS sites. QuickDownload includes built-in safeguards to enforce HTTPS in production.
 </details>
 
 <details>
 <summary><strong>4. Server Disk Space / Memory Exhaustion</strong></summary>
 
-SAVEALL includes an automated garbage collection routine in `backend/main.py` that automatically purges video files older than 30 minutes and deletes incomplete `.part` / `.temp` files after failed download attempts.
+QuickDownload includes an automated garbage collection routine in `backend/main.py` that automatically purges video files older than 30 minutes and deletes incomplete `.part` / `.temp` files after failed download attempts.
 </details>
 
 ---
@@ -469,5 +469,5 @@ This software is developed strictly for **educational and personal archival purp
 ---
 
 <div align="center">
-  <sub>© 2026 SAVEALL • All Rights Reserved • Built by Shashikant Raj (SashiBitCode)</sub>
+  <sub>© 2026 QuickDownload • All Rights Reserved • Built by Shashikant Raj (SashiBitCode)</sub>
 </div>

@@ -59,7 +59,7 @@ YOUTUBE_PROXY = normalize_proxy_url(
 )
 DOWNLOAD_DIR = os.getenv(
     "DOWNLOAD_DIR",
-    os.path.join(tempfile.gettempdir(), "saveall-downloads"),
+    os.path.join(tempfile.gettempdir(), "quickdownload-downloads"),
 )
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -796,7 +796,7 @@ def download_youtube(payload: DownloadRequest, request: Request):
         if now - cached_at < CACHE_TTL_SECONDS:
             cached_info = cached_data
 
-    cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_B64, "saveall-youtube-")
+    cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_B64, "quickdownload-youtube-")
     info = cached_info
     successful_client = None
 
@@ -1026,7 +1026,7 @@ def download_instagram(payload: DownloadRequest, request: Request):
         )
 
     cleanup_downloads()
-    cookie_file = create_cookie_file_from_env(INSTAGRAM_COOKIES_B64, "saveall-instagram-")
+    cookie_file = create_cookie_file_from_env(INSTAGRAM_COOKIES_B64, "quickdownload-instagram-")
 
     output_template = os.path.join(DOWNLOAD_DIR, "%(title).50s-%(id)s.%(ext)s")
     ydl_options: Any = {
@@ -1151,6 +1151,6 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     print(f"\n==============================================")
-    print(f"  SAVEALL Backend running at: http://127.0.0.1:{port}")
+    print(f"  QuickDownload Backend running at: http://127.0.0.1:{port}")
     print(f"==============================================\n")
     uvicorn.run(app, host="127.0.0.1", port=port)

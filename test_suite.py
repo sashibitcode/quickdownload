@@ -13,7 +13,7 @@ sys.path.insert(0, backend_dir)
 from main import app, DOWNLOAD_DIR, cleanup_failed_artifacts, cleanup_downloads
 
 print("=" * 60)
-print("RUNNING SAVEALL LOCAL TEST SUITE")
+print("RUNNING QUICKDOWNLOAD LOCAL TEST SUITE")
 print("=" * 60)
 
 # Start uvicorn background process on port 8009
@@ -44,7 +44,7 @@ try:
     req = urllib.request.Request(
         f"{base_url}/download",
         headers={
-            "Origin": "https://saveall-xi.vercel.app",
+            "Origin": "https://quick-d.vercel.app",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "Content-Type",
         },
@@ -55,7 +55,7 @@ try:
         cors_header = resp.headers.get("access-control-allow-origin")
         print("CORS Allow-Origin:", cors_header)
         assert resp.status == 200
-        assert cors_header == "https://saveall-xi.vercel.app"
+        assert cors_header == "https://quick-d.vercel.app"
 
     # 3. Invalid URL
     print("\n--- Test 3: Invalid URL ---")
@@ -142,7 +142,7 @@ try:
     print("\n--- Test 8: Live Render Backend Health Check ---")
     try:
         render_req = urllib.request.Request(
-            "https://saveall-api.onrender.com/health",
+            "https://quickdownload-api.onrender.com/health",
             headers={"User-Agent": "Mozilla/5.0"},
         )
         with urllib.request.urlopen(render_req, timeout=15) as r_resp:
