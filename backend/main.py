@@ -307,24 +307,35 @@ def create_cookie_file_from_env(cookie_data: str, prefix: str):
     if not cookie_data:
         return None
     try:
-        data_stripped = cookie_data.strip()
+        data_stripped = cookie_data.strip().strip("'\"")
+        if not data_stripped:
+            return None
+
         # Direct file path support (e.g. Render Secret File mounted at /etc/secrets/... or local file)
         if os.path.isfile(data_stripped):
             return data_stripped
 
         decoded: bytes | None = None
-        # Try base64 decoding first
-        try:
-            candidate = base64.b64decode(data_stripped, validate=True)
-            # Check if candidate contains text or tabs
-            if b"\t" in candidate or b"# Netscape" in candidate:
-                decoded = candidate
-        except Exception:
-            pass
 
-        # If not valid base64 or raw text provided directly
-        if not decoded:
+        # 1. Check if raw Netscape format was passed directly (contains tabs or # Netscape)
+        if "\t" in data_stripped or "# Netscape" in data_stripped:
             decoded = data_stripped.encode("utf-8")
+
+        # 2. Otherwise try base64 decoding (auto-stripping whitespace and auto-adding missing padding)
+        if not decoded:
+            try:
+                clean_b64 = "".join(data_stripped.split())
+                pad = (-len(clean_b64) % 4) * "="
+                candidate = base64.b64decode(clean_b64 + pad)
+                if b"\t" in candidate or b"# Netscape" in candidate or b".youtube.com" in candidate or b".instagram.com" in candidate:
+                    decoded = candidate
+            except Exception as b64_err:
+                print(f"[Cookie Parse Error] Base64 decode failed for {prefix}:", repr(b64_err))
+
+        # 3. If still not valid Netscape cookie bytes, DO NOT write an invalid cookie file!
+        if not decoded or (b"\t" not in decoded and b"# Netscape" not in decoded):
+            print(f"[Cookie Warning] Provided cookie data for {prefix} is not a valid Netscape format; omitting cookiefile to prevent yt-dlp crash.")
+            return None
 
         temp_file = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".txt", delete=False)
         temp_file.write(decoded)
@@ -1026,7 +1037,7 @@ def perform_youtube_download(
         print(f"Error in background download for {youtube_url}:", repr(err))
     finally:
         event.set()
-        if cookie_file and os.path.exists(cookie_file):
+        if cookie_file and os.path.exists(cookie_file) and cookie_file != YOUTUBE_COOKIES_FILE and cookie_file != LOCAL_YT_COOKIES:
             try:
                 os.unlink(cookie_file)
             except Exception:
