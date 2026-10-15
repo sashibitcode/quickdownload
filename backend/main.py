@@ -885,13 +885,12 @@ def download_media(payload: DownloadRequest, request: Request):
         )
 
 
-# YouTube Player Client Fallback Sequence (Mobile-first to minimize datacenter IP challenges)
+# YouTube Player Client Fallback Sequence
+# Production test confirmed 'default' succeeds with all formats on Render in ~20s.
 YOUTUBE_CLIENT_CHAIN: list[tuple[str, list[str] | None]] = [
-    ("android", ["android"]),
-    ("ios", ["ios"]),
-    ("mweb", ["mweb"]),
-    ("web_creator", ["web_creator"]),
     ("default", None),
+    ("web", ["web"]),
+    ("android", ["android"]),
 ]
 
 
