@@ -2918,3 +2918,353 @@ input {
   }
 }
 
+/* ==========================================================================
+   PROGRESSIVE WEB APP (PWA) STYLES
+   ========================================================================== */
+
+/* Navbar Install Button */
+.pwa-nav-install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  background: rgba(134, 59, 255, 0.12);
+  border: 1px solid rgba(134, 59, 255, 0.4);
+  border-radius: 9999px;
+  color: #ede6ff;
+  font-family: var(--font-display, inherit);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 0 15px rgba(134, 59, 255, 0.15);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.pwa-nav-install-btn:hover {
+  background: rgba(134, 59, 255, 0.25);
+  border-color: rgba(134, 59, 255, 0.8);
+  box-shadow: 0 0 25px rgba(134, 59, 255, 0.35);
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+.pwa-btn-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.pwa-btn-label {
+  letter-spacing: 0.02em;
+}
+
+/* Mobile Floating Install Banner */
+.pwa-mobile-banner {
+  position: fixed;
+  bottom: 20px;
+  left: 16px;
+  right: 16px;
+  max-width: 460px;
+  margin: 0 auto;
+  z-index: 9999;
+  background: rgba(13, 13, 18, 0.94);
+  border: 1px solid rgba(134, 59, 255, 0.35);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(134, 59, 255, 0.2);
+  border-radius: 16px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  animation: pwaSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pwaSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.pwa-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pwa-banner-icon-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #863bff, #47bfff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  box-shadow: 0 0 15px rgba(134, 59, 255, 0.4);
+}
+
+.pwa-banner-copy {
+  min-width: 0;
+}
+
+.pwa-banner-heading {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pwa-banner-sub {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pwa-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pwa-banner-install-btn {
+  padding: 7px 14px;
+  background: linear-gradient(135deg, #863bff, #a855f7);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 0 15px rgba(134, 59, 255, 0.4);
+  transition: transform 0.2s, box-shadow 0.2s;
+  white-space: nowrap;
+}
+
+.pwa-banner-install-btn:hover {
+  transform: scale(1.03);
+  box-shadow: 0 0 25px rgba(134, 59, 255, 0.6);
+}
+
+.pwa-banner-dismiss-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.pwa-banner-dismiss-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+/* iOS Safari & Universal Install Modal */
+.pwa-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: pwaFadeIn 0.25s ease-out;
+}
+
+@keyframes pwaFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pwa-modal-sheet {
+  background: #0f0f15;
+  border: 1px solid rgba(134, 59, 255, 0.35);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(134, 59, 255, 0.2);
+  border-radius: 20px;
+  max-width: 440px;
+  width: 100%;
+  padding: 24px;
+  animation: pwaSheetPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pwaSheetPop {
+  from {
+    opacity: 0;
+    transform: scale(0.93) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.pwa-modal-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  position: relative;
+}
+
+.pwa-modal-icon-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #863bff, #47bfff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+  box-shadow: 0 0 20px rgba(134, 59, 255, 0.5);
+}
+
+.pwa-modal-title-wrap {
+  flex: 1;
+}
+
+.pwa-modal-heading {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffffff;
+  font-family: var(--font-display, inherit);
+}
+
+.pwa-modal-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 800;
+  color: #c084fc;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+
+.pwa-modal-close-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pwa-modal-close-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+.pwa-modal-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #94a3b8;
+  margin: 0 0 18px;
+}
+
+.pwa-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.pwa-step-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+.pwa-step-circle {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(134, 59, 255, 0.25);
+  border: 1px solid rgba(134, 59, 255, 0.5);
+  color: #c084fc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.pwa-step-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.pwa-step-text strong {
+  color: #ffffff;
+}
+
+.pwa-highlight-icon {
+  display: inline-block;
+  padding: 1px 5px;
+  background: rgba(134, 59, 255, 0.2);
+  border: 1px solid rgba(134, 59, 255, 0.4);
+  border-radius: 4px;
+  color: #ede6ff;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.pwa-modal-confirm-btn {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #863bff, #a855f7);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(134, 59, 255, 0.4);
+  transition: all 0.2s;
+}
+
+.pwa-modal-confirm-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 28px rgba(134, 59, 255, 0.6);
+}
+
+

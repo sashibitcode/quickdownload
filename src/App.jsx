@@ -685,7 +685,20 @@ function HowItWorks() {
 }
 
 function App() {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const shared = params.get("url") || params.get("text") || params.get("title");
+      if (shared) {
+        const match = shared.match(/https?:\/\/[^\s]+/i);
+        return match ? match[0] : shared;
+      }
+    } catch {
+      // ignore
+    }
+    return "";
+  });
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -696,6 +709,18 @@ function App() {
   const [qualityDownloads, setQualityDownloads] = useState({});
   const [isSwitchingQuality, setIsSwitchingQuality] = useState(false);
   const [backendStatus, setBackendStatus] = useState("checking"); // 'checking' | 'ready' | 'waking' | 'offline'
+
+  // PWA Installation states
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstalled, setIsInstalled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return (
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true
+    );
+  });
+  const [showIosModal, setShowIosModal] = useState(false);
+  const [showMobileBanner, setShowMobileBanner] = useState(false);
 
   const progressIntervalRef = useRef(null);
 
@@ -711,6 +736,42 @@ function App() {
     return () => {
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
     };
+  }, []);
+
+  // PWA: Listen for beforeinstallprompt & handle installation lifecycle
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      if (window.innerWidth <= 768) {
+        setShowMobileBanner(true);
+      }
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setShowMobileBanner(false);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  // Web Share Target: Clean query params from address bar after parsing
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("url") || params.has("text") || params.has("title")) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   // On-mount backend health check to gracefully detect cold starts on Render/Railway
@@ -1138,6 +1199,38 @@ function App() {
     }
   };
 
+  // PWA: Trigger native install prompt or show iOS instructions
+  const handleInstallClick = async () => {
+    if (typeof window === "undefined") return;
+
+    const isIos = /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    const isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true;
+
+    if (isIos && !isStandalone) {
+      setShowIosModal(true);
+      return;
+    }
+
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === "accepted") {
+          setIsInstalled(true);
+          setIsInstallable(false);
+          setShowMobileBanner(false);
+        }
+        setDeferredPrompt(null);
+      } catch (err) {
+        console.warn("[PWA] Install prompt error:", err);
+      }
+    } else {
+      setShowIosModal(true);
+    }
+  };
+
   return (
     <div className={`app-wrapper ${activeTheme}`}>
       {/* 1-second Confetti Celebration Burst */}
@@ -1162,6 +1255,17 @@ function App() {
           </div>
 
           <div className="nav-actions">
+            {!isInstalled && (
+              <button
+                type="button"
+                className="pwa-nav-install-btn"
+                onClick={handleInstallClick}
+                title="Install QuickDownload App to your phone or desktop"
+              >
+                <span className="pwa-btn-icon" aria-hidden="true">📲</span>
+                <span className="pwa-btn-label">Install App</span>
+              </button>
+            )}
             <div className="engine-status">
               <span className="status-dot pulsing"></span>
               <span className="status-label">Ultra Engine Active</span>
@@ -1565,6 +1669,98 @@ function App() {
           </div>
         </div>
       </footer>
+
+      {/* Mobile Floating PWA Install Prompt Banner */}
+      {showMobileBanner && !isInstalled && (
+        <aside className="pwa-mobile-banner" aria-label="Install App Prompt">
+          <div className="pwa-banner-left">
+            <div className="pwa-banner-icon-badge">
+              <span>⚡</span>
+            </div>
+            <div className="pwa-banner-copy">
+              <p className="pwa-banner-heading">Install QuickDownload App</p>
+              <p className="pwa-banner-sub">Add to Home Screen for 1-click video & reel downloads.</p>
+            </div>
+          </div>
+          <div className="pwa-banner-actions">
+            <button
+              type="button"
+              className="pwa-banner-install-btn"
+              onClick={handleInstallClick}
+            >
+              Install Now
+            </button>
+            <button
+              type="button"
+              className="pwa-banner-dismiss-btn"
+              onClick={() => setShowMobileBanner(false)}
+              aria-label="Dismiss banner"
+            >
+              ✕
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* iOS Safari / Universal Install Guide Modal */}
+      {showIosModal && (
+        <div className="pwa-modal-backdrop" onClick={() => setShowIosModal(false)}>
+          <div className="pwa-modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="pwa-modal-top">
+              <div className="pwa-modal-icon-badge">
+                <span>📲</span>
+              </div>
+              <div className="pwa-modal-title-wrap">
+                <h3 className="pwa-modal-heading">Install QuickDownload</h3>
+                <span className="pwa-modal-tag">HOME SCREEN APP</span>
+              </div>
+              <button
+                type="button"
+                className="pwa-modal-close-btn"
+                onClick={() => setShowIosModal(false)}
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="pwa-modal-desc">
+              Install QuickDownload directly onto your phone or desktop for the best full-screen experience without address bars.
+            </p>
+
+            <div className="pwa-steps-list">
+              <div className="pwa-step-card">
+                <span className="pwa-step-circle">1</span>
+                <p className="pwa-step-text">
+                  Tap the browser <strong>Share button</strong> <span className="pwa-highlight-icon">⎋</span> (in Safari bottom bar or Chrome menu).
+                </p>
+              </div>
+
+              <div className="pwa-step-card">
+                <span className="pwa-step-circle">2</span>
+                <p className="pwa-step-text">
+                  Scroll down and tap <strong>"Add to Home Screen"</strong> <span className="pwa-highlight-icon">⊞</span>.
+                </p>
+              </div>
+
+              <div className="pwa-step-card">
+                <span className="pwa-step-circle">3</span>
+                <p className="pwa-step-text">
+                  Tap <strong>"Add"</strong> in the top-right corner. QuickDownload is now on your home screen!
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="pwa-modal-confirm-btn"
+              onClick={() => setShowIosModal(false)}
+            >
+              Got It, Thanks!
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
