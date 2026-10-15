@@ -2657,6 +2657,36 @@ input {
   }
 }
 
+/* Backend Waking Status Banner */
+.backend-waking-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  color: #fde047;
+  font-size: 0.82rem;
+  font-weight: 500;
+  animation: fadeIn 0.3s ease;
+}
+
+.waking-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #facc15;
+  box-shadow: 0 0 8px #facc15;
+  animation: pulseWaking 1.5s infinite;
+}
+
+@keyframes pulseWaking {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
 /* ==========================================================================
    THEMED ERROR CARD (JUTSU FAILED + RETRY)
    ========================================================================== */

@@ -21,18 +21,23 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import yt_dlp  # type: ignore[import-untyped]
 
 # Environment variables
+# Environment variables (supports ALLOWED_ORIGINS, FRONTEND_ORIGINS, and FRONTEND_ORIGIN)
+raw_origins = (
+    os.getenv("ALLOWED_ORIGINS")
+    or os.getenv("FRONTEND_ORIGINS")
+    or os.getenv("FRONTEND_ORIGIN", "http://127.0.0.1:5173")
+)
 FRONTEND_ORIGINS = [
     origin.strip().rstrip("/")
-    for origin in os.getenv(
-        "FRONTEND_ORIGINS",
-        os.getenv("FRONTEND_ORIGIN", "http://127.0.0.1:5173"),
-    ).split(",")
+    for origin in raw_origins.split(",")
     if origin.strip()
 ]
 
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "").strip().rstrip("/")
 YOUTUBE_COOKIES_B64 = (os.getenv("YT_COOKIES") or os.getenv("YOUTUBE_COOKIES_B64", "")).strip()
 INSTAGRAM_COOKIES_B64 = os.getenv("INSTAGRAM_COOKIES_B64", "").strip()
+YOUTUBE_COOKIES_FILE = (os.getenv("YOUTUBE_COOKIES_FILE") or os.getenv("YT_COOKIES_FILE") or os.getenv("COOKIES_FILE", "")).strip()
+INSTAGRAM_COOKIES_FILE = (os.getenv("INSTAGRAM_COOKIES_FILE") or os.getenv("IG_COOKIES_FILE", "")).strip()
 
 
 def normalize_proxy_url(raw_proxy: str | None) -> str:
@@ -170,23 +175,30 @@ allowed_origins = [o for o in allowed_origins if o]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_origin_regex=r"https://([a-zA-Z0-9_-]+\.)?(vercel\.app|onrender\.com)$",
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(:\d+)?|https://([a-zA-Z0-9_-]+\.)?(vercel\.app|onrender\.com))$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS", "HEAD", "PUT", "DELETE"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Length", "X-Filename"],
 )
 
 
 # Structured Error Handlers (Step 4 & 8)
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    if isinstance(exc.detail, dict):
+        detail = exc.detail.get("detail") or exc.detail.get("error") or "Error processing request."
+        code = exc.detail.get("code") or "HTTP_ERROR"
+    else:
+        detail = str(exc.detail) if exc.detail else "Error processing request."
+        code = "HTTP_ERROR"
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "success": False,
             "error": detail,
             "detail": detail,
+            "code": code,
         },
     )
 
@@ -279,14 +291,19 @@ def cleanup_failed_artifacts(identifier: str | None = None):
 
 
 def create_cookie_file_from_env(cookie_data: str, prefix: str):
-    """Write raw or base64-encoded Netscape cookies to a temp file and return path."""
+    """Write raw or base64-encoded Netscape cookies to a temp file, or return existing file path."""
     if not cookie_data:
         return None
     try:
+        data_stripped = cookie_data.strip()
+        # Direct file path support (e.g. Render Secret File mounted at /etc/secrets/... or local file)
+        if os.path.isfile(data_stripped):
+            return data_stripped
+
         decoded: bytes | None = None
         # Try base64 decoding first
         try:
-            candidate = base64.b64decode(cookie_data.strip(), validate=True)
+            candidate = base64.b64decode(data_stripped, validate=True)
             # Check if candidate contains text or tabs
             if b"\t" in candidate or b"# Netscape" in candidate:
                 decoded = candidate
@@ -295,7 +312,7 @@ def create_cookie_file_from_env(cookie_data: str, prefix: str):
 
         # If not valid base64 or raw text provided directly
         if not decoded:
-            decoded = cookie_data.encode("utf-8")
+            decoded = data_stripped.encode("utf-8")
 
         temp_file = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".txt", delete=False)
         temp_file.write(decoded)
@@ -796,7 +813,7 @@ def download_youtube(payload: DownloadRequest, request: Request):
         if now - cached_at < CACHE_TTL_SECONDS:
             cached_info = cached_data
 
-    cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_B64, "quickdownload-youtube-")
+    cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_FILE or YOUTUBE_COOKIES_B64, "quickdownload-youtube-")
     info = cached_info
     successful_client = None
 
@@ -849,16 +866,21 @@ def download_youtube(payload: DownloadRequest, request: Request):
             # Sanitize error message: never leak raw yt-dlp error text or GitHub issues links
             if "private" in err_str.lower() or "unavailable" in err_str.lower() or "removed" in err_str.lower():
                 detail = "This YouTube video is private, restricted, or unavailable."
+                code = "PRIVATE_OR_UNAVAILABLE"
             elif "members only" in err_str.lower() or "premium" in err_str.lower() or "purchase" in err_str.lower():
                 detail = "This YouTube video requires channel membership or purchase."
+                code = "MEMBERS_ONLY"
             elif "sign in" in err_str.lower() or "bot" in err_str.lower() or "429" in err_str.lower() or "cookies" in err_str.lower():
                 detail = "YouTube temporarily limited server access. Please try again shortly or configure proxy/cookies."
+                code = "RATE_LIMITED"
             elif "age" in err_str.lower() or "inappropriate" in err_str.lower():
                 detail = "This YouTube video is age-restricted and requires account authentication."
+                code = "AGE_RESTRICTED"
             else:
                 detail = "Unable to process this YouTube video from the server. Please check the link and try again."
+                code = "EXTRACTION_FAILED"
 
-            raise HTTPException(status_code=400, detail=detail)
+            raise HTTPException(status_code=400, detail={"error": detail, "detail": detail, "code": code})
 
         if info:
             METADATA_CACHE[youtube_url] = (info, now)
@@ -1026,7 +1048,7 @@ def download_instagram(payload: DownloadRequest, request: Request):
         )
 
     cleanup_downloads()
-    cookie_file = create_cookie_file_from_env(INSTAGRAM_COOKIES_B64, "quickdownload-instagram-")
+    cookie_file = create_cookie_file_from_env(INSTAGRAM_COOKIES_FILE or INSTAGRAM_COOKIES_B64, "quickdownload-instagram-")
 
     output_template = os.path.join(DOWNLOAD_DIR, "%(title).50s-%(id)s.%(ext)s")
     ydl_options: Any = {
@@ -1055,6 +1077,10 @@ def download_instagram(payload: DownloadRequest, request: Request):
         ydl_options["js_runtimes"] = js_cfg
     if cookie_file:
         ydl_options["cookiefile"] = cookie_file
+
+    ig_proxy = normalize_proxy_url(os.getenv("INSTAGRAM_PROXY") or os.getenv("IG_PROXY") or YOUTUBE_PROXY)
+    if ig_proxy:
+        ydl_options["proxy"] = ig_proxy
 
     try:
         with yt_dlp.YoutubeDL(cast(Any, ydl_options)) as ydl:
@@ -1131,26 +1157,56 @@ def download_instagram(payload: DownloadRequest, request: Request):
 
         if "empty media response" in msg.lower() or "logged-in" in msg.lower() or "cookies" in msg.lower() or "login required" in msg.lower():
             detail = "This Instagram content is private or requires login. Only publicly accessible Instagram Reel/Post links can be downloaded."
+            code = "PRIVATE_OR_UNAVAILABLE"
         elif "rate-limit" in msg.lower() or "429" in msg.lower():
             detail = "Instagram request was rate-limited. Please wait a few minutes and try again."
+            code = "RATE_LIMITED"
         elif "not found" in msg.lower() or "does not exist" in msg.lower():
             detail = "This Instagram post or reel could not be found or has been removed."
+            code = "NOT_FOUND"
         else:
             detail = "Unable to process this Instagram link from the server. Please check the link and try again."
+            code = "EXTRACTION_FAILED"
 
-        raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=400, detail={"error": detail, "detail": detail, "code": code})
     finally:
-        if cookie_file and os.path.exists(cookie_file):
+        if cookie_file and os.path.exists(cookie_file) and cookie_file != INSTAGRAM_COOKIES_FILE:
             try:
                 os.unlink(cookie_file)
             except Exception:
                 pass
 
 
+def check_ytdlp_update():
+    """Non-blocking background check for yt-dlp library updates."""
+    try:
+        import subprocess, sys
+        print("[Startup] Checking for yt-dlp updates in background...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--upgrade", "yt-dlp"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        first_line = result.stdout.strip().split("\n")[0] if result.stdout else "done"
+        print(f"[Startup] yt-dlp update check: {first_line}")
+    except Exception as e:
+        print(f"[Startup] yt-dlp update check skipped: {repr(e)}")
+
+
+@app.on_event("startup")
+def on_startup():
+    ver = getattr(yt_dlp, "version", None)
+    v_str = getattr(ver, "__version__", "installed") if ver else "installed"
+    print(f"[Startup] QuickDownload API initializing. Active yt-dlp version: {v_str}")
+    t = threading.Thread(target=check_ytdlp_update, daemon=True)
+    t.start()
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     print(f"\n==============================================")
-    print(f"  QuickDownload Backend running at: http://127.0.0.1:{port}")
+    print(f"  QuickDownload Backend running at: http://0.0.0.0:{port}")
     print(f"==============================================\n")
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)

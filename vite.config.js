@@ -5,6 +5,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: "0.0.0.0",
     port: 5180,
     strictPort: false,
     proxy: {
@@ -15,6 +16,7 @@ export default defineConfig({
     },
   },
   preview: {
+    host: "0.0.0.0",
     port: 5180,
     strictPort: false,
     proxy: {

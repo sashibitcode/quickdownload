@@ -4,6 +4,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/download-file",
+      "destination": "https://quickdownload-api.onrender.com/download-file"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://quickdownload-api.onrender.com/api/:path*"
     }

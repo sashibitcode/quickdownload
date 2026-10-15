@@ -4,21 +4,58 @@ import { SITE_CONFIG } from "./config";
 
 // Resolve API Base URL:
 // 1. Check VITE_API_URL or VITE_API_BASE_URL
-// 2. In production, default to canonical deployed Render backend: https://quickdownload-api.onrender.com
-// 3. In local development, default to /api (proxied by Vite to http://127.0.0.1:8000)
-const envApiUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL)?.trim();
-const API_BASE_URL = (
-  envApiUrl ||
-  (import.meta.env.PROD ? "https://quickdownload-api.onrender.com" : "/api")
+// 2. Sanitize against decommissioned saveall-api.onrender.com URL
+// 3. In production, default to same-origin /api (rewritten by vercel.json) with canonical Render fallback
+const CANONICAL_RENDER_URL = "https://quickdownload-api.onrender.com";
+
+const rawEnvUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL)?.trim() || "";
+const cleanEnvUrl = rawEnvUrl.includes("saveall-api.onrender.com")
+  ? CANONICAL_RENDER_URL
+  : rawEnvUrl;
+
+// In dev, use /api (proxied by Vite to http://127.0.0.1:8000).
+// In production on Vercel, default to same-origin (handled by vercel.json rewrites) with canonical Render fallback.
+const PRIMARY_API_BASE_URL = (
+  cleanEnvUrl ||
+  (import.meta.env.PROD ? "" : "/api")
 ).replace(/\/$/, "");
 
+function getEndpointUrl(path) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (!PRIMARY_API_BASE_URL) {
+    return normalizedPath.startsWith("/api") ? normalizedPath : `/api${normalizedPath}`;
+  }
+  if (PRIMARY_API_BASE_URL.endsWith("/api")) {
+    const subPath = normalizedPath.startsWith("/api") ? normalizedPath.slice(4) : normalizedPath;
+    return `${PRIMARY_API_BASE_URL}${subPath}`;
+  }
+  return `${PRIMARY_API_BASE_URL}${normalizedPath.startsWith("/api") ? normalizedPath : `/api${normalizedPath}`}`;
+}
+
+async function executeApiFetch(path, options = {}) {
+  const primaryUrl = getEndpointUrl(path);
+  try {
+    const response = await fetch(primaryUrl, options);
+    return { response, usedUrl: primaryUrl };
+  } catch (primaryErr) {
+    if (primaryErr instanceof TypeError && !primaryUrl.includes("quickdownload-api.onrender.com")) {
+      const fallbackSub = path.startsWith("/") ? path : `/${path}`;
+      const fallbackUrl = `${CANONICAL_RENDER_URL}${fallbackSub.startsWith("/api") ? fallbackSub : `/api${fallbackSub}`}`;
+      console.warn(`Primary fetch to ${primaryUrl} failed. Falling back to ${fallbackUrl}`);
+      const fallbackResponse = await fetch(fallbackUrl, options);
+      return { response: fallbackResponse, usedUrl: fallbackUrl };
+    }
+    throw primaryErr;
+  }
+}
+
 function getApiConfigurationError() {
-  if (!import.meta.env.PROD) {
+  if (!import.meta.env.PROD || !PRIMARY_API_BASE_URL) {
     return "";
   }
 
   try {
-    const parsed = new URL(API_BASE_URL, window.location.origin);
+    const parsed = new URL(PRIMARY_API_BASE_URL, window.location.origin);
     if (parsed.protocol === "http:" && window.location.protocol === "https:") {
       return "Production API must use HTTPS to prevent browser mixed content blocking.";
     }
@@ -529,15 +566,37 @@ function ResultCard({
   );
 }
 
-// Themed Jutsu Error Card
+// Themed Jutsu Error Card (Categorized with adaptive badge & tips)
 function ErrorCard({ error, onRetry, onDismiss }) {
+  const errorObj =
+    typeof error === "object" && error !== null
+      ? error
+      : { message: error, title: "Jutsu failed! Please check the link and try again.", category: "general" };
+
+  const getBadgeIcon = (category) => {
+    switch (category) {
+      case "network":
+        return "📡";
+      case "cold_start":
+        return "⏳";
+      case "private":
+        return "🔒";
+      case "rate_limit":
+        return "⏱️";
+      case "invalid_link":
+        return "🔗";
+      default:
+        return "⚠️";
+    }
+  };
+
   return (
-    <div className="jutsu-error-card" role="alert">
+    <div className={`jutsu-error-card ${errorObj.category ? `error-category-${errorObj.category}` : ""}`} role="alert">
       <div className="error-card-glow" />
       <div className="error-card-header">
         <div className="error-jutsu-badge">
-          <span className="error-seal-icon">⚠️</span>
-          <span>Jutsu failed! Please check the link and try again.</span>
+          <span className="error-seal-icon">{getBadgeIcon(errorObj.category)}</span>
+          <span>{errorObj.title || "Jutsu failed! Please check the link and try again."}</span>
         </div>
         <button
           type="button"
@@ -550,7 +609,22 @@ function ErrorCard({ error, onRetry, onDismiss }) {
       </div>
 
       <div className="error-card-body">
-        <p className="error-card-message">{error}</p>
+        <p className="error-card-message">{errorObj.message}</p>
+        {errorObj.tip && (
+          <p
+            className="error-card-tip"
+            style={{
+              fontSize: "0.84rem",
+              marginTop: "8px",
+              padding: "6px 10px",
+              background: "rgba(255, 255, 255, 0.05)",
+              borderRadius: "6px",
+              color: "rgba(255, 255, 255, 0.85)",
+            }}
+          >
+            💡 {errorObj.tip}
+          </p>
+        )}
         <button
           type="button"
           className="error-retry-btn"
@@ -621,6 +695,7 @@ function App() {
   const [selectedQuality, setSelectedQuality] = useState("720p");
   const [qualityDownloads, setQualityDownloads] = useState({});
   const [isSwitchingQuality, setIsSwitchingQuality] = useState(false);
+  const [backendStatus, setBackendStatus] = useState("checking"); // 'checking' | 'ready' | 'waking' | 'offline'
 
   const progressIntervalRef = useRef(null);
 
@@ -635,6 +710,47 @@ function App() {
   useEffect(() => {
     return () => {
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    };
+  }, []);
+
+  // On-mount backend health check to gracefully detect cold starts on Render/Railway
+  useEffect(() => {
+    let isMounted = true;
+    let pollTimer = null;
+
+    const checkHealth = async () => {
+      try {
+        const pingPromise = executeApiFetch("/health", { signal: AbortSignal.timeout(5000) });
+        const slowTimer = setTimeout(() => {
+          if (isMounted) setBackendStatus((prev) => (prev === "ready" ? "ready" : "waking"));
+        }, 2200);
+
+        const { response } = await pingPromise;
+        clearTimeout(slowTimer);
+
+        if (response.ok) {
+          if (isMounted) setBackendStatus("ready");
+        } else if (response.status === 502 || response.status === 503) {
+          if (isMounted) {
+            setBackendStatus("waking");
+            pollTimer = setTimeout(checkHealth, 4000);
+          }
+        } else {
+          if (isMounted) setBackendStatus("offline");
+        }
+      } catch {
+        if (isMounted) {
+          setBackendStatus("waking");
+          pollTimer = setTimeout(checkHealth, 4500);
+        }
+      }
+    };
+
+    checkHealth();
+
+    return () => {
+      isMounted = false;
+      if (pollTimer) clearTimeout(pollTimer);
     };
   }, []);
 
@@ -691,99 +807,171 @@ function App() {
     setLoading(true);
     startProgressAnimation();
 
-    const controller = new AbortController();
-    const abortTimer = setTimeout(() => {
-      controller.abort();
-    }, 85000);
+    let attempt = 0;
+    const maxAttempts = 2;
+    let lastError = null;
 
-    try {
-      const configurationError = getApiConfigurationError();
-      if (configurationError) {
-        throw new Error(configurationError);
-      }
+    while (attempt < maxAttempts) {
+      attempt++;
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => {
+        controller.abort();
+      }, 90000);
 
-      const endpoint = `${API_BASE_URL}/download`;
+      try {
+        const configurationError = getApiConfigurationError();
+        if (configurationError) {
+          throw new Error(configurationError);
+        }
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: JSON.stringify({
-          platform: targetPlatform === "youtube" ? "YouTube" : "Instagram",
-          url: cleanUrl,
-          quality: overrideQuality,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(abortTimer);
-
-      const data = await readApiResponse(response);
-
-      if (!response.ok) {
-        let errorMsg =
-          data.error ||
-          data.detail ||
-          (response.status === 400
-            ? "Invalid URL or request format."
-            : response.status === 404
-            ? "API endpoint was not found on the server."
-            : response.status === 502 || response.status === 503
-            ? "Backend server is temporarily waking up. Please try again shortly."
-            : "Server returned an error while processing the link.");
-
-        throw new Error(errorMsg);
-      }
-
-      // Snap to Step 3 (Ready!) and 100%
-      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-      setCurrentStep(3);
-      setProgressPercent(100);
-      setShowCelebration(true);
-
-      const initialQuality = data.quality || overrideQuality || "720p";
-      setSelectedQuality(initialQuality);
-      setQualityDownloads({
-        [initialQuality]: data.download_url,
-      });
-
-      // Show "Ready!" state with celebration for ~850ms before revealing Result Card
-      setTimeout(() => {
-        setLoading(false);
-        setResult({
-          platform: data.platform || (targetPlatform === "youtube" ? "YouTube" : "Instagram"),
-          url: cleanUrl,
-          status: data.status || "ready",
-          title: data.title || "Video ready",
-          fileName: data.file_name || "",
-          downloadUrl: data.download_url || "",
-          thumbnail: data.thumbnail || null,
-          duration: data.duration || null,
-          uploader: data.uploader || null,
-          filesize: data.filesize || null,
-          media_badge: data.media_badge || (targetPlatform === "youtube" ? "YouTube Video" : "Instagram Reel"),
-          qualities: data.qualities || [],
-          message: data.message || "Video is ready for download.",
+        const { response } = await executeApiFetch("/download", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: JSON.stringify({
+            platform: targetPlatform === "youtube" ? "YouTube" : "Instagram",
+            url: cleanUrl,
+            quality: overrideQuality,
+          }),
+          signal: controller.signal,
         });
 
-        // Hide confetti after 1.2 seconds total
-        setTimeout(() => setShowCelebration(false), 1200);
-      }, 850);
+        clearTimeout(abortTimer);
 
-    } catch (err) {
-      clearTimeout(abortTimer);
-      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-      setLoading(false);
+        const data = await readApiResponse(response);
 
-      if (err.name === "AbortError") {
-        setError("Request timed out. The server might be busy or waking up. Please try again.");
-      } else if (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) {
-        setError("Backend server is unreachable. Please verify network connection or server status.");
-      } else {
-        setError(err.message || "Download could not be completed.");
+        if (!response.ok) {
+          const errorDetail = data.detail || data.error || "";
+          const errorCode = data.code || "";
+          let category = "general";
+          let title = "Jutsu failed! Please check the link and try again.";
+          let tip = "";
+
+          if (
+            errorCode === "PRIVATE_OR_UNAVAILABLE" ||
+            errorDetail.toLowerCase().includes("private") ||
+            errorDetail.toLowerCase().includes("login")
+          ) {
+            category = "private";
+            title = "Content is Private or Requires Login";
+            tip = "Make sure the Instagram Reel or YouTube video is publicly accessible without login.";
+          } else if (
+            errorCode === "RATE_LIMITED" ||
+            response.status === 429 ||
+            errorDetail.toLowerCase().includes("rate-limit")
+          ) {
+            category = "rate_limit";
+            title = "Rate Limit Reached";
+            tip = "Instagram or YouTube is temporarily limiting access. Please wait 1-2 minutes and try again.";
+          } else if (
+            errorCode === "NOT_FOUND" ||
+            errorDetail.toLowerCase().includes("not found") ||
+            errorDetail.toLowerCase().includes("does not exist")
+          ) {
+            category = "invalid_link";
+            title = "Content Not Found";
+            tip = "This post or reel may have been deleted or the link is broken.";
+          } else if (
+            errorCode === "INVALID_LINK" ||
+            (response.status === 400 && errorDetail.toLowerCase().includes("unsupported"))
+          ) {
+            category = "invalid_link";
+            title = "Unsupported Link";
+            tip = "Please check that the link starts with https://www.instagram.com/reel/ or https://www.youtube.com/watch?v=";
+          } else if (response.status === 502 || response.status === 503) {
+            category = "cold_start";
+            title = "Server Waking Up";
+            tip = "Cloud servers sleep when idle and take ~30-50s to cold-start. Tap Retry Jutsu to reconnect.";
+          }
+
+          const customError = new Error(errorDetail || "Server returned an error while processing the link.");
+          customError.category = category;
+          customError.title = title;
+          customError.tip = tip;
+          throw customError;
+        }
+
+        // Snap to Step 3 (Ready!) and 100%
+        if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+        setCurrentStep(3);
+        setProgressPercent(100);
+        setShowCelebration(true);
+
+        const initialQuality = data.quality || overrideQuality || "720p";
+        setSelectedQuality(initialQuality);
+        setQualityDownloads({
+          [initialQuality]: data.download_url,
+        });
+
+        // Show "Ready!" state with celebration for ~850ms before revealing Result Card
+        setTimeout(() => {
+          setLoading(false);
+          setResult({
+            platform: data.platform || (targetPlatform === "youtube" ? "YouTube" : "Instagram"),
+            url: cleanUrl,
+            status: data.status || "ready",
+            title: data.title || "Video ready",
+            fileName: data.file_name || "",
+            downloadUrl: data.download_url || "",
+            thumbnail: data.thumbnail || null,
+            duration: data.duration || null,
+            uploader: data.uploader || null,
+            filesize: data.filesize || null,
+            media_badge: data.media_badge || (targetPlatform === "youtube" ? "YouTube Video" : "Instagram Reel"),
+            qualities: data.qualities || [],
+            message: data.message || "Video is ready for download.",
+          });
+
+          // Hide confetti after 1.2 seconds total
+          setTimeout(() => setShowCelebration(false), 1200);
+        }, 850);
+
+        return; // Success!
+
+      } catch (err) {
+        clearTimeout(abortTimer);
+        lastError = err;
+        const isNetworkOrTimeout =
+          err.name === "AbortError" ||
+          (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) ||
+          err.category === "cold_start";
+
+        if (attempt < maxAttempts && isNetworkOrTimeout) {
+          console.warn(`Connection attempt ${attempt} interrupted (${err.message}). Auto-retrying backend in 2.5s...`);
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          continue;
+        }
+        break;
       }
+    }
+
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    setLoading(false);
+    const err = lastError;
+
+    if (err.name === "AbortError") {
+      setError({
+        title: "Request Timed Out",
+        message: "The backend server took too long to complete the download. The cloud server may be waking up from sleep.",
+        category: "cold_start",
+        tip: "Render free instances take ~30-50s to cold-start. Please tap Retry Jutsu to connect.",
+      });
+    } else if (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) {
+      setError({
+        title: "Connection Failed",
+        message: "Backend server is unreachable. Please verify network connection or server status.",
+        category: "network",
+        tip: "If testing on mobile 5G data, make sure your deployed cloud backend is active. If on WiFi, ensure your device is on the same local network.",
+      });
+    } else {
+      setError({
+        title: err.title || "Jutsu failed! Please check the link and try again.",
+        message: err.message || "Download could not be completed.",
+        category: err.category || "general",
+        tip: err.tip || "",
+      });
     }
   };
 
@@ -800,8 +988,7 @@ function App() {
     // Fetch this quality URL in background with lightweight feedback
     setIsSwitchingQuality(true);
     try {
-      const endpoint = `${API_BASE_URL}/download`;
-      const response = await fetch(endpoint, {
+      const { response } = await executeApiFetch("/download", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -840,11 +1027,15 @@ function App() {
 
       let fileUrl = qualityDownloads[selectedQuality] || result.downloadUrl;
       if (!fileUrl && result.fileName) {
-        fileUrl = `${API_BASE_URL}/download-file?filename=${encodeURIComponent(result.fileName)}`;
+        fileUrl = getEndpointUrl(`/download-file?filename=${encodeURIComponent(result.fileName)}`);
       }
 
       if (!fileUrl) {
         throw new Error("No downloadable file was returned by the server.");
+      }
+
+      if (fileUrl.includes("saveall-api.onrender.com")) {
+        fileUrl = fileUrl.replace("saveall-api.onrender.com", "quickdownload-api.onrender.com");
       }
 
       if (window.location.protocol === "https:" && fileUrl.startsWith("http://")) {
@@ -1012,6 +1203,12 @@ function App() {
                   ? "Instagram link detected • Ready to fetch Reel or Post"
                   : "Paste any YouTube or Instagram video link — auto-detected instantly"}
               </p>
+              {backendStatus === "waking" && (
+                <div className="backend-waking-chip" role="status">
+                  <span className="waking-pulse-dot" />
+                  <span>Cloud backend is waking up (Render free tier cold-start). Ready shortly!</span>
+                </div>
+              )}
             </div>
           </div>
 
