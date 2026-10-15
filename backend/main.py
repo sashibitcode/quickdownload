@@ -657,7 +657,7 @@ def debug_yt(request: Request, token: str | None = None, url: str | None = None)
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
-        "socket_timeout": 8,
+        "socket_timeout": 5,
         "retries": 0,
         "remote_components": ["ejs:github"],
         "nocheckcertificate": True,
@@ -1094,7 +1094,7 @@ def download_youtube(payload: DownloadRequest, request: Request):
             "no_warnings": True,
             "noplaylist": True,
             "skip_download": True,
-            "socket_timeout": 8,
+            "socket_timeout": 5,
             "retries": 0,
             "remote_components": ["ejs:github"],
             "nocheckcertificate": True,
@@ -1139,6 +1139,9 @@ def download_youtube(payload: DownloadRequest, request: Request):
             except Exception as client_err:
                 last_error = client_err
                 print(f"[yt-dlp] Client '{client_name}' extraction failed for {youtube_url}: {repr(client_err)}")
+                err_str = str(client_err).lower()
+                if any(x in err_str for x in ["video unavailable", "private video", "this video has been removed", "does not exist"]):
+                    break
                 continue
 
         if not info and last_error:
