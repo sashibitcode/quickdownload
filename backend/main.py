@@ -678,8 +678,14 @@ def debug_yt(request: Request, token: str | None = None, url: str | None = None)
     client_probe_results = []
     success_info = None
 
-    for c_name, c_args in YOUTUBE_CLIENT_CHAIN:
+    for candidate_tuple in YOUTUBE_CLIENT_CHAIN:
+        c_name = candidate_tuple[0]
+        c_args = candidate_tuple[1]
+        c_use_cookies = candidate_tuple[2] if len(candidate_tuple) > 2 else True
+
         c_opts = dict(fast_opts)
+        if not c_use_cookies:
+            c_opts.pop("cookiefile", None)
         if c_args:
             c_opts["extractor_args"] = {"youtube": {"player_client": c_args}}
         if YT_PO_TOKEN:
@@ -763,6 +769,8 @@ def debug_yt(request: Request, token: str | None = None, url: str | None = None)
             },
             "auth_and_network": {
                 "youtube_cookies_configured": bool(YOUTUBE_COOKIES_B64 or YOUTUBE_COOKIES_FILE),
+                "youtube_cookie_file_active": bool(cookie_file and os.path.isfile(cookie_file)),
+                "youtube_cookie_file_size": os.path.getsize(cookie_file) if cookie_file and os.path.isfile(cookie_file) else 0,
                 "youtube_proxy_configured": bool(YOUTUBE_PROXY),
                 "po_token_configured": bool(YT_PO_TOKEN),
             },
@@ -900,11 +908,15 @@ def download_media(payload: DownloadRequest, request: Request):
 
 
 # YouTube Player Client Fallback Sequence
-# Production test confirmed 'default' succeeds with all formats on Render in ~20s.
-YOUTUBE_CLIENT_CHAIN: list[tuple[str, list[str] | None]] = [
-    ("default", None),
-    ("web", ["web"]),
-    ("android", ["android"]),
+# (client_name, player_client_args, use_cookies)
+# If cookies are valid, 'default' and 'web' use them for full 1080p+ stream URLs.
+# If cookies expire/rotate, 'android_nocookies' and 'ios_nocookies' bypass cookie challenge.
+YOUTUBE_CLIENT_CHAIN: list[tuple[str, list[str] | None, bool]] = [
+    ("default", None, True),
+    ("web", ["web"], True),
+    ("android", ["android"], True),
+    ("android_nocookies", ["android"], False),
+    ("ios_nocookies", ["ios"], False),
 ]
 
 
@@ -998,10 +1010,16 @@ def perform_youtube_download(
                 downloaded_info = ydl.extract_info(youtube_url, download=True)
         except Exception as primary_err:
             print("PRIMARY YOUTUBE DOWNLOAD FAILED, RETRYING WITH FALLBACK CHAIN:", repr(primary_err))
-            for candidate_name, candidate_client in YOUTUBE_CLIENT_CHAIN:
+            for candidate_tuple in YOUTUBE_CLIENT_CHAIN:
+                candidate_name = candidate_tuple[0]
+                candidate_client = candidate_tuple[1]
+                candidate_use_cookies = candidate_tuple[2] if len(candidate_tuple) > 2 else True
+
                 if candidate_client == player_client:
                     continue
                 fb_opts = dict(ydl_options)
+                if not candidate_use_cookies:
+                    fb_opts.pop("cookiefile", None)
                 if candidate_client:
                     fb_opts["extractor_args"] = {"youtube": {"player_client": candidate_client}}
                 else:
@@ -1095,8 +1113,14 @@ def download_youtube(payload: DownloadRequest, request: Request):
             fast_opts["cookiefile"] = cookie_file
 
         last_error = None
-        for client_name, client_args in YOUTUBE_CLIENT_CHAIN:
+        for candidate_tuple in YOUTUBE_CLIENT_CHAIN:
+            client_name = candidate_tuple[0]
+            client_args = candidate_tuple[1]
+            client_use_cookies = candidate_tuple[2] if len(candidate_tuple) > 2 else True
+
             candidate_opts = dict(fast_opts)
+            if not client_use_cookies:
+                candidate_opts.pop("cookiefile", None)
             if client_args:
                 candidate_opts["extractor_args"] = {"youtube": {"player_client": client_args}}
             if YT_PO_TOKEN:
