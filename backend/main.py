@@ -42,6 +42,9 @@ DEBUG_TOKEN = os.getenv("DEBUG_TOKEN", "").strip()
 YOUTUBE_COOKIES_B64 = (os.getenv("YT_COOKIES") or os.getenv("YOUTUBE_COOKIES_B64", "")).strip()
 INSTAGRAM_COOKIES_B64 = os.getenv("INSTAGRAM_COOKIES_B64", "").strip()
 YOUTUBE_COOKIES_FILE = (os.getenv("YOUTUBE_COOKIES_FILE") or os.getenv("YT_COOKIES_FILE") or os.getenv("COOKIES_FILE", "")).strip()
+LOCAL_YT_COOKIES = os.path.join(os.path.dirname(__file__), "cookies.txt")
+if not YOUTUBE_COOKIES_FILE and os.path.isfile(LOCAL_YT_COOKIES):
+    YOUTUBE_COOKIES_FILE = LOCAL_YT_COOKIES
 INSTAGRAM_COOKIES_FILE = (os.getenv("INSTAGRAM_COOKIES_FILE") or os.getenv("IG_COOKIES_FILE", "")).strip()
 YT_PO_TOKEN = os.getenv("YT_PO_TOKEN", "").strip()
 YT_VISITOR_DATA = os.getenv("YT_VISITOR_DATA", "").strip()

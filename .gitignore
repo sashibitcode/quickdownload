@@ -22,6 +22,8 @@ __pycache__/
 venv/
 env/
 *.part
+*cookies*.txt
+cookies.txt
 quickdownload-main/
 
 # Editor directories and files
