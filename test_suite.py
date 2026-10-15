@@ -148,9 +148,21 @@ try:
         with urllib.request.urlopen(render_req, timeout=15) as r_resp:
             r_body = json.loads(r_resp.read().decode())
             print("Render production /health status:", r_resp.status)
-            print("Render production /health response:", r_body)
     except Exception as r_err:
         print("Render production health check note (may be sleeping/waking):", r_err)
+
+    # 9. Debug Endpoint Check (/debug/yt)
+    print("\n--- Test 9: YouTube Debug Diagnostics Endpoint ---")
+    debug_req = urllib.request.Request(f"{base_url}/debug/yt")
+    with urllib.request.urlopen(debug_req, timeout=25) as d_resp:
+        d_body = json.loads(d_resp.read().decode())
+        print("Debug endpoint status:", d_resp.status)
+        print("Debug yt-dlp version:", d_body.get("diagnostics", {}).get("yt_dlp_version"))
+        print("Debug node:", d_body.get("diagnostics", {}).get("node"))
+        print("Debug extraction success:", d_body.get("test_extraction", {}).get("success"))
+        assert d_resp.status == 200
+        assert d_body.get("success") is True
+        assert "diagnostics" in d_body
 
     print("\n" + "=" * 60)
     print("ALL TESTS PASSED SUCCESSFULLY!")

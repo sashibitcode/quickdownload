@@ -850,12 +850,58 @@ function App() {
           let tip = "";
 
           if (
+            errorCode === "BOT_BLOCKED" ||
+            errorDetail.toLowerCase().includes("bot") ||
+            errorDetail.toLowerCase().includes("datacenter")
+          ) {
+            category = "rate_limit";
+            title = "YouTube Bot Protection Triggered";
+            tip = "YouTube blocked requests from the cloud datacenter IP. Please configure YouTube cookies (YT_COOKIES) or proxy (YT_PROXY) in Render environment variables.";
+          } else if (
+            errorCode === "AGE_RESTRICTED" ||
+            errorDetail.toLowerCase().includes("age")
+          ) {
+            category = "private";
+            title = "Age-Restricted Video";
+            tip = "This YouTube video requires age verification. Please provide cookies on the server to download age-restricted content.";
+          } else if (
+            errorCode === "GEO_BLOCKED" ||
+            errorDetail.toLowerCase().includes("geo") ||
+            errorDetail.toLowerCase().includes("country")
+          ) {
+            category = "invalid_link";
+            title = "Video Region Locked";
+            tip = "The uploader has not made this video available in the cloud server's region.";
+          } else if (
+            errorCode === "TIMEOUT" ||
+            errorDetail.toLowerCase().includes("timeout")
+          ) {
+            category = "cold_start";
+            title = "YouTube Connection Timed Out";
+            tip = "YouTube servers took too long to respond. Tap Retry Jutsu to try again.";
+          } else if (
+            errorCode === "FFMPEG_MISSING" ||
+            errorDetail.toLowerCase().includes("ffmpeg")
+          ) {
+            category = "general";
+            title = "Server Media Processor Missing";
+            tip = "FFmpeg was not detected on the server host. Please verify server configuration.";
+          } else if (
+            errorCode === "EXTRACTOR_OUTDATED" ||
+            errorDetail.toLowerCase().includes("extractor") ||
+            errorDetail.toLowerCase().includes("signature")
+          ) {
+            category = "general";
+            title = "YouTube Extractor Updating";
+            tip = "YouTube changed its player script signatures. The server is auto-updating yt-dlp in the background.";
+          } else if (
             errorCode === "PRIVATE_OR_UNAVAILABLE" ||
             errorDetail.toLowerCase().includes("private") ||
+            errorDetail.toLowerCase().includes("unavailable") ||
             errorDetail.toLowerCase().includes("login")
           ) {
             category = "private";
-            title = "Content is Private or Requires Login";
+            title = "Content is Private or Unavailable";
             tip = "Make sure the Instagram Reel or YouTube video is publicly accessible without login.";
           } else if (
             errorCode === "RATE_LIMITED" ||
@@ -890,6 +936,7 @@ function App() {
           customError.category = category;
           customError.title = title;
           customError.tip = tip;
+          customError.code = errorCode;
           throw customError;
         }
 

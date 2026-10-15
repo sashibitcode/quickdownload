@@ -2,10 +2,14 @@ import base64
 import json
 import mimetypes
 import os
+import platform
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from typing import Any, cast
 import urllib.error
 from urllib.parse import quote, urlparse
@@ -34,10 +38,13 @@ FRONTEND_ORIGINS = [
 ]
 
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "").strip().rstrip("/")
+DEBUG_TOKEN = os.getenv("DEBUG_TOKEN", "").strip()
 YOUTUBE_COOKIES_B64 = (os.getenv("YT_COOKIES") or os.getenv("YOUTUBE_COOKIES_B64", "")).strip()
 INSTAGRAM_COOKIES_B64 = os.getenv("INSTAGRAM_COOKIES_B64", "").strip()
 YOUTUBE_COOKIES_FILE = (os.getenv("YOUTUBE_COOKIES_FILE") or os.getenv("YT_COOKIES_FILE") or os.getenv("COOKIES_FILE", "")).strip()
 INSTAGRAM_COOKIES_FILE = (os.getenv("INSTAGRAM_COOKIES_FILE") or os.getenv("IG_COOKIES_FILE", "")).strip()
+YT_PO_TOKEN = os.getenv("YT_PO_TOKEN", "").strip()
+YT_VISITOR_DATA = os.getenv("YT_VISITOR_DATA", "").strip()
 
 
 def normalize_proxy_url(raw_proxy: str | None) -> str:
@@ -141,10 +148,12 @@ if NODE_PATH:
 
 def get_js_runtimes_config():
     config = {}
-    if DENO_PATH:
-        config["deno"] = {"path": DENO_PATH}
-    if NODE_PATH:
-        config["node"] = {"path": NODE_PATH}
+    deno = DENO_PATH or resolve_executable("deno")
+    node = NODE_PATH or resolve_executable("node")
+    if deno:
+        config["deno"] = {"path": deno}
+    if node:
+        config["node"] = {"path": node}
     return config if config else None
 
 app = FastAPI(
@@ -522,6 +531,232 @@ def version():
     }
 
 
+def classify_youtube_error(exc: Exception) -> tuple[str, str]:
+    """
+    Classify yt-dlp extraction errors into granular machine-readable codes and user-friendly messages.
+    Returns (code, message).
+    Codes: BOT_BLOCKED, AGE_RESTRICTED, PRIVATE_OR_UNAVAILABLE, GEO_BLOCKED, TIMEOUT, FFMPEG_MISSING, EXTRACTOR_OUTDATED, UNKNOWN
+    """
+    err_str = str(exc).lower()
+
+    # 1. Bot detection / Rate limiting
+    if any(k in err_str for k in ["sign in to confirm you're not a bot", "bot", "automated queries", "429", "too many requests", "challenge"]):
+        return (
+            "BOT_BLOCKED",
+            "YouTube blocked datacenter server requests (Bot detection / 429). Please configure YouTube cookies (YT_COOKIES) or proxy (YT_PROXY) on the server.",
+        )
+
+    # 2. Age-restricted
+    if any(k in err_str for k in ["age", "inappropriate", "confirm your age"]):
+        return (
+            "AGE_RESTRICTED",
+            "This YouTube video is age-restricted and requires account authentication via cookies.",
+        )
+
+    # 3. Private / unavailable / deleted
+    if any(k in err_str for k in ["private", "unavailable", "removed", "does not exist", "not found", "deleted"]):
+        return (
+            "PRIVATE_OR_UNAVAILABLE",
+            "This YouTube video is private, restricted, or unavailable.",
+        )
+
+    # 4. Geo-blocking
+    if any(k in err_str for k in ["country", "geo", "region", "not available in your"]):
+        return (
+            "GEO_BLOCKED",
+            "This YouTube video is geo-blocked and not available in the server's region.",
+        )
+
+    # 5. Timeouts
+    if any(k in err_str for k in ["timeout", "timed out", "timedout"]):
+        return (
+            "TIMEOUT",
+            "YouTube server request timed out. Please try again.",
+        )
+
+    # 6. Missing FFmpeg
+    if any(k in err_str for k in ["ffmpeg", "ffprobe"]):
+        return (
+            "FFMPEG_MISSING",
+            "FFmpeg is missing or failed on the server. Please verify FFmpeg installation.",
+        )
+
+    # 7. Outdated extractor / signature deciphering
+    if any(k in err_str for k in ["signature deciphering", "unable to extract", "extractor", "ejs", "javascript runtime"]):
+        return (
+            "EXTRACTOR_OUTDATED",
+            "YouTube player signature changed. Extractor or JS challenge solver requires update.",
+        )
+
+    # 8. Membership / Premium
+    if any(k in err_str for k in ["members only", "premium", "purchase"]):
+        return (
+            "PRIVATE_OR_UNAVAILABLE",
+            "This YouTube video requires channel membership or purchase.",
+        )
+
+    return (
+        "UNKNOWN",
+        f"Unable to process this YouTube video: {str(exc)[:150]}",
+    )
+
+
+def get_executable_version(cmd: list[str]) -> str | None:
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        out = (res.stdout or res.stderr or "").strip()
+        return out.split("\n")[0] if out else None
+    except Exception as e:
+        return f"error: {str(e)}"
+
+
+@app.get("/debug/yt")
+@app.get("/api/debug/yt")
+def debug_yt(request: Request, token: str | None = None, url: str | None = None):
+    # Verify token if DEBUG_TOKEN is set
+    client_token = token or request.headers.get("x-debug-token") or ""
+    if DEBUG_TOKEN and client_token != DEBUG_TOKEN:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Invalid or missing debug token. Set ?token=... or X-Debug-Token header.",
+        )
+
+    yt_ver = getattr(getattr(yt_dlp, "version", None), "__version__", "unknown")
+    ffmpeg_ver = get_executable_version([FFMPEG_PATH, "-version"]) if FFMPEG_PATH else None
+    deno_path = DENO_PATH or resolve_executable("deno")
+    node_path = NODE_PATH or resolve_executable("node")
+    deno_ver = get_executable_version([deno_path, "--version"]) if deno_path else None
+    node_ver = get_executable_version([node_path, "-v"]) if node_path else None
+
+    # Test extraction
+    test_url = sanitize_youtube_url(url or "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    cookie_file = create_cookie_file_from_env(YOUTUBE_COOKIES_FILE or YOUTUBE_COOKIES_B64, "quickdownload-debug-")
+
+    extraction_start = time.time()
+    extraction_result: dict[str, Any] = {
+        "url": test_url,
+        "success": False,
+    }
+
+    fast_opts: Any = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+        "socket_timeout": 8,
+        "retries": 0,
+        "remote_components": ["ejs:github"],
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+    js_cfg = get_js_runtimes_config()
+    if js_cfg:
+        fast_opts["js_runtimes"] = js_cfg
+    if YOUTUBE_PROXY:
+        fast_opts["proxy"] = YOUTUBE_PROXY
+    if cookie_file:
+        fast_opts["cookiefile"] = cookie_file
+
+    client_probe_results = []
+    success_info = None
+
+    for c_name, c_args in YOUTUBE_CLIENT_CHAIN:
+        c_opts = dict(fast_opts)
+        if c_args:
+            c_opts["extractor_args"] = {"youtube": {"player_client": c_args}}
+        if YT_PO_TOKEN:
+            if "extractor_args" not in c_opts:
+                c_opts["extractor_args"] = {"youtube": {}}
+            c_opts["extractor_args"]["youtube"]["po_token"] = [YT_PO_TOKEN]
+
+        t0 = time.time()
+        try:
+            with yt_dlp.YoutubeDL(cast(Any, c_opts)) as ydl:
+                info = ydl.extract_info(test_url, download=False)
+                if info and (info.get("formats") or info.get("title")):
+                    duration_ms = round((time.time() - t0) * 1000, 2)
+                    client_probe_results.append({
+                        "client": c_name,
+                        "success": True,
+                        "duration_ms": duration_ms,
+                        "formats_count": len(info.get("formats", [])),
+                    })
+                    if not success_info:
+                        success_info = info
+                    break
+        except Exception as e:
+            duration_ms = round((time.time() - t0) * 1000, 2)
+            c_code, c_msg = classify_youtube_error(e)
+            client_probe_results.append({
+                "client": c_name,
+                "success": False,
+                "duration_ms": duration_ms,
+                "code": c_code,
+                "error": str(e)[:300],
+            })
+
+    total_duration_ms = round((time.time() - extraction_start) * 1000, 2)
+    if success_info:
+        extraction_result["success"] = True
+        extraction_result["title"] = success_info.get("title")
+        extraction_result["formats_count"] = len(success_info.get("formats", []))
+        extraction_result["duration_ms"] = total_duration_ms
+        extraction_result["client_probes"] = client_probe_results
+    else:
+        last_err = client_probe_results[-1] if client_probe_results else None
+        extraction_result["success"] = False
+        extraction_result["duration_ms"] = total_duration_ms
+        extraction_result["last_error"] = last_err
+        extraction_result["client_probes"] = client_probe_results
+
+    if cookie_file and os.path.exists(cookie_file) and cookie_file != YOUTUBE_COOKIES_FILE:
+        try:
+            os.unlink(cookie_file)
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "diagnostics": {
+            "yt_dlp_version": yt_ver,
+            "ffmpeg": {
+                "configured": bool(FFMPEG_PATH),
+                "path": FFMPEG_PATH,
+                "version": ffmpeg_ver,
+            },
+            "deno": {
+                "configured": bool(deno_path),
+                "path": deno_path,
+                "version": deno_ver,
+            },
+            "node": {
+                "configured": bool(node_path),
+                "path": node_path,
+                "version": node_ver,
+            },
+            "python": {
+                "version": sys.version.split()[0],
+                "executable": sys.executable,
+            },
+            "system": {
+                "platform": platform.platform(),
+                "os": os.name,
+                "arch": platform.machine(),
+            },
+            "auth_and_network": {
+                "youtube_cookies_configured": bool(YOUTUBE_COOKIES_B64 or YOUTUBE_COOKIES_FILE),
+                "youtube_proxy_configured": bool(YOUTUBE_PROXY),
+                "po_token_configured": bool(YT_PO_TOKEN),
+            },
+        },
+        "test_extraction": extraction_result,
+    }
+
+
 @app.get("/download-folder")
 @app.get("/api/download-folder")
 def download_folder():
@@ -650,13 +885,13 @@ def download_media(payload: DownloadRequest, request: Request):
         )
 
 
-# YouTube Player Client Fallback Sequence
+# YouTube Player Client Fallback Sequence (Mobile-first to minimize datacenter IP challenges)
 YOUTUBE_CLIENT_CHAIN: list[tuple[str, list[str] | None]] = [
-    ("default", None),
-    ("tv", ["tv"]),
-    ("web_safari", ["web_safari"]),
-    ("mweb", ["mweb"]),
     ("android", ["android"]),
+    ("ios", ["ios"]),
+    ("mweb", ["mweb"]),
+    ("web_creator", ["web_creator"]),
+    ("default", None),
 ]
 
 
@@ -707,6 +942,7 @@ def perform_youtube_download(
         "restrictfilenames": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
+        "remote_components": ["ejs:github"],
         "socket_timeout": 15,
         "retries": 2,
         "fragment_retries": 2,
@@ -718,6 +954,10 @@ def perform_youtube_download(
 
     if player_client:
         ydl_options["extractor_args"] = {"youtube": {"player_client": player_client}}
+    if YT_PO_TOKEN:
+        if "extractor_args" not in ydl_options:
+            ydl_options["extractor_args"] = {"youtube": {}}
+        ydl_options["extractor_args"]["youtube"]["po_token"] = [YT_PO_TOKEN]
 
     if is_audio:
         ydl_options["postprocessors"] = [{
@@ -823,8 +1063,9 @@ def download_youtube(payload: DownloadRequest, request: Request):
             "no_warnings": True,
             "noplaylist": True,
             "skip_download": True,
-            "socket_timeout": 15,
-            "retries": 2,
+            "socket_timeout": 8,
+            "retries": 0,
+            "remote_components": ["ejs:github"],
             "nocheckcertificate": True,
             "geo_bypass": True,
             "http_headers": {
@@ -845,6 +1086,11 @@ def download_youtube(payload: DownloadRequest, request: Request):
             candidate_opts = dict(fast_opts)
             if client_args:
                 candidate_opts["extractor_args"] = {"youtube": {"player_client": client_args}}
+            if YT_PO_TOKEN:
+                if "extractor_args" not in candidate_opts:
+                    candidate_opts["extractor_args"] = {"youtube": {}}
+                candidate_opts["extractor_args"]["youtube"]["po_token"] = [YT_PO_TOKEN]
+
             try:
                 with yt_dlp.YoutubeDL(cast(Any, candidate_opts)) as ydl:
                     extracted = ydl.extract_info(youtube_url, download=False)
@@ -860,27 +1106,29 @@ def download_youtube(payload: DownloadRequest, request: Request):
 
         if not info and last_error:
             cleanup_failed_artifacts()
-            err_str = str(last_error)
-            print("ALL YOUTUBE CLIENTS FAILED. Last error:", repr(last_error))
+            code, detail = classify_youtube_error(last_error)
 
-            # Sanitize error message: never leak raw yt-dlp error text or GitHub issues links
-            if "private" in err_str.lower() or "unavailable" in err_str.lower() or "removed" in err_str.lower():
-                detail = "This YouTube video is private, restricted, or unavailable."
-                code = "PRIVATE_OR_UNAVAILABLE"
-            elif "members only" in err_str.lower() or "premium" in err_str.lower() or "purchase" in err_str.lower():
-                detail = "This YouTube video requires channel membership or purchase."
-                code = "MEMBERS_ONLY"
-            elif "sign in" in err_str.lower() or "bot" in err_str.lower() or "429" in err_str.lower() or "cookies" in err_str.lower():
-                detail = "YouTube temporarily limited server access. Please try again shortly or configure proxy/cookies."
-                code = "RATE_LIMITED"
-            elif "age" in err_str.lower() or "inappropriate" in err_str.lower():
-                detail = "This YouTube video is age-restricted and requires account authentication."
-                code = "AGE_RESTRICTED"
-            else:
-                detail = "Unable to process this YouTube video from the server. Please check the link and try again."
-                code = "EXTRACTION_FAILED"
+            # Log FULL underlying error on server console (as required by Step 1)
+            yt_active_version = getattr(getattr(yt_dlp, "version", None), "__version__", "unknown")
+            print("=" * 70)
+            print(f"[yt-dlp ERROR] YouTube extraction completely failed for URL: {youtube_url}")
+            print(f"[yt-dlp ERROR] Active yt-dlp version: {yt_active_version}")
+            print(f"[yt-dlp ERROR] Granular error code: {code}")
+            print(f"[yt-dlp ERROR] Last exception class: {type(last_error).__name__}")
+            print(f"[yt-dlp ERROR] Exception detail: {str(last_error)}")
+            print("[yt-dlp ERROR] Traceback:")
+            print(traceback.format_exc())
+            print("=" * 70)
 
-            raise HTTPException(status_code=400, detail={"error": detail, "detail": detail, "code": code})
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": detail,
+                    "detail": detail,
+                    "code": code,
+                    "raw_error": str(last_error)[:200],
+                },
+            )
 
         if info:
             METADATA_CACHE[youtube_url] = (info, now)

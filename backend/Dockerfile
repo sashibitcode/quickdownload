@@ -14,7 +14,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -U -r requirements.txt
-
 COPY main.py .
 
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}
+CMD sh -c "pip install --no-cache-dir -U yt-dlp && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"

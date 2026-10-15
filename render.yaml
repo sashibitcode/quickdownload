@@ -13,9 +13,19 @@ services:
         sync: false
       - key: PUBLIC_API_URL
         sync: false
+      - key: DEBUG_TOKEN
+        sync: false
       - key: INSTAGRAM_COOKIES_B64
         sync: false
       - key: YOUTUBE_COOKIES_B64
         sync: false
+      - key: YT_COOKIES
+        sync: false
       - key: YOUTUBE_PROXY
+        sync: false
+      - key: YT_PROXY
+        sync: false
+      - key: YT_PO_TOKEN
+        sync: false
+      - key: YT_VISITOR_DATA
         sync: false
