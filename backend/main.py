@@ -57,12 +57,22 @@ def normalize_proxy_url(raw_proxy: str | None) -> str:
     p = raw_proxy.strip().strip("'\"")
     if not p:
         return ""
-    if "://" in p:
+    if p.startswith("http://") or p.startswith("https://") or p.startswith("socks5://"):
         return p
+
+    # Split lines in case multiline text was provided
+    first_line = p.splitlines()[0].strip() if p.splitlines() else p
+
     # Handle Webshare colon export format: host:port:username:password
-    parts = p.split(":")
-    if len(parts) == 4:
-        host, port, user, pwd = parts
+    parts = first_line.split(":")
+    if len(parts) >= 4:
+        host = parts[0].strip()
+        port = parts[1].strip()
+        user = parts[2].strip()
+        pwd = parts[3].strip()
+        # In case multiple lines were concatenated into a single line without spaces, extract password
+        if len(pwd) > 12 and any(ch.isdigit() for ch in pwd[12:]):
+            pwd = pwd[:12]
         return f"http://{user}:{pwd}@{host}:{port}"
     if "@" in p:
         return f"http://{p}"
