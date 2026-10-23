@@ -815,6 +815,28 @@ function App() {
     };
   }, []);
 
+  // Real-time Visitor Notification tracking (once per session)
+  useEffect(() => {
+    try {
+      const hasTracked = sessionStorage.getItem("qd_visit_tracked");
+      if (!hasTracked) {
+        sessionStorage.setItem("qd_visit_tracked", "1");
+        executeApiFetch("/track-visit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            referrer: document.referrer || "Direct Visit",
+            screen: `${window.screen.width}x${window.screen.height}`,
+            url: window.location.href,
+          }),
+        }).catch(() => {});
+      }
+    } catch {
+      // Ignore storage/tracking errors
+    }
+  }, []);
+
+
   const startProgressAnimation = () => {
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
     setProgressPercent(8);

@@ -25,6 +25,9 @@ env/
 *cookies*.txt
 cookies.txt
 quickdownload-main/
+cloudflared.exe
+*.exe
+
 
 # Editor directories and files
 .vscode/*

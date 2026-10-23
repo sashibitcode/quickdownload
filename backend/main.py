@@ -49,6 +49,66 @@ INSTAGRAM_COOKIES_FILE = (os.getenv("INSTAGRAM_COOKIES_FILE") or os.getenv("IG_C
 YT_PO_TOKEN = os.getenv("YT_PO_TOKEN", "").strip()
 YT_VISITOR_DATA = os.getenv("YT_VISITOR_DATA", "").strip()
 
+# Telegram Visitor Notifications
+TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TG_BOT_TOKEN", "")).strip()
+TELEGRAM_ADMIN_CHAT_ID = (os.getenv("TELEGRAM_ADMIN_CHAT_ID") or os.getenv("ADMIN_CHAT_ID", "")).strip()
+
+VISITOR_CACHE: dict[str, float] = {}
+VISITOR_CACHE_LOCK = threading.Lock()
+VISITOR_COOLDOWN_SECONDS = 900  # 15 minutes per IP
+
+def send_telegram_alert(text: str) -> None:
+    token = TELEGRAM_BOT_TOKEN
+    chat_id = TELEGRAM_ADMIN_CHAT_ID
+    if not token or not chat_id:
+        return
+    try:
+        api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            api_url,
+            data=data,
+            headers={"Content-Type": "application/json", "User-Agent": "QuickDownload/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except Exception as e:
+        print("[Telegram Alert Error]", repr(e))
+
+def parse_device_info(ua_string: str) -> str:
+    ua = (ua_string or "").lower()
+    if "android" in ua:
+        device = "📱 Android Mobile"
+    elif "iphone" in ua or "ipad" in ua:
+        device = "📱 iOS Device (iPhone/iPad)"
+    elif "windows" in ua:
+        device = "💻 Windows PC"
+    elif "macintosh" in ua or "mac os" in ua:
+        device = "💻 Mac OS"
+    elif "linux" in ua:
+        device = "💻 Linux"
+    else:
+        device = "🌐 Unknown Device"
+
+    browser = "Browser"
+    if "edg" in ua:
+        browser = "Edge"
+    elif "chrome" in ua:
+        browser = "Chrome"
+    elif "firefox" in ua:
+        browser = "Firefox"
+    elif "safari" in ua and "chrome" not in ua:
+        browser = "Safari"
+
+    return f"{device} ({browser})"
+
+
 
 def normalize_proxy_url(raw_proxy: str | None) -> str:
     """Normalize user-provided proxy strings (including Webshare export formats) into standard URLs."""
@@ -520,6 +580,52 @@ def health():
         "success": True,
         "status": "healthy",
     }
+
+
+class VisitPayload(BaseModel):
+    referrer: str | None = None
+    screen: str | None = None
+    url: str | None = None
+
+
+@app.post("/track-visit")
+@app.post("/api/track-visit")
+@app.get("/track-visit")
+@app.get("/api/track-visit")
+async def track_visit(request: Request, payload: VisitPayload | None = None):
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "Unknown"
+
+    now = time.time()
+    with VISITOR_CACHE_LOCK:
+        last_seen = VISITOR_CACHE.get(client_ip, 0)
+        if now - last_seen < VISITOR_COOLDOWN_SECONDS:
+            return {"success": True, "tracked": False, "reason": "cooldown"}
+        VISITOR_CACHE[client_ip] = now
+        stale_keys = [k for k, v in VISITOR_CACHE.items() if now - v > 7200]
+        for k in stale_keys:
+            VISITOR_CACHE.pop(k, None)
+
+    ua_header = request.headers.get("user-agent", "Unknown")
+    device_info = parse_device_info(ua_header)
+    ref = (payload.referrer if payload and payload.referrer else request.headers.get("referer", "Direct Visit")) or "Direct Visit"
+    screen = payload.screen if payload and payload.screen else "Unknown"
+
+    alert_message = (
+        "🚀 *QuickDownload Visitor Alert!*\n\n"
+        f"📱 *Device:* {device_info}\n"
+        f"🌐 *IP Address:* `{client_ip}`\n"
+        f"📐 *Screen:* {screen}\n"
+        f"🔗 *Referrer:* {ref}\n"
+        f"⏰ *Time:* {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
+    )
+
+    threading.Thread(target=send_telegram_alert, args=(alert_message,), daemon=True).start()
+    return {"success": True, "tracked": True}
+
 
 
 @app.get("/version")
